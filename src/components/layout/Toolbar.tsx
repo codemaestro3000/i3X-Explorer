@@ -25,6 +25,7 @@ export function Toolbar() {
   const [theme, setTheme] = useState<Theme>(getInitialTheme)
   const [apiVersion, setApiVersion] = useState<ApiVersion | null>(null)
   const [showV0Warning, setShowV0Warning] = useState(false)
+  const [v0Acknowledged, setV0Acknowledged] = useState(false)
   const [showSettingsMenu, setShowSettingsMenu] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
 
@@ -82,7 +83,7 @@ export function Toolbar() {
         setConnected(true)
         const detectedVersion = client.getApiVersion()
         setApiVersion(detectedVersion)
-        if (detectedVersion === 'v0') setShowV0Warning(true)
+        if (detectedVersion === 'v0') { setV0Acknowledged(false); setShowV0Warning(true) }
         addRecentUrl(serverUrl)
 
         // Load initial data
@@ -236,9 +237,9 @@ export function Toolbar() {
               ? 'bg-i3x-success/10 text-i3x-success border-i3x-success/20'
               : apiVersion === 'v1-beta'
               ? 'bg-i3x-primary/10 text-i3x-primary border-i3x-primary/20'
-              : 'bg-i3x-warning/10 text-i3x-warning border-i3x-warning/20'
+              : 'bg-i3x-error/10 text-i3x-error border-i3x-error/20 animate-pulse'
           }`}>
-            {apiVersion === 'v1-beta' ? 'v1 Beta' : apiVersion}
+            {apiVersion === 'v1-beta' ? 'v1 Beta' : apiVersion === 'v0' ? 'v0 (Deprecated)' : apiVersion}
           </span>
         )}
         {isConnected && credentials && (
@@ -263,7 +264,7 @@ export function Toolbar() {
             </div>
             <div className="p-4 space-y-3 text-sm text-i3x-text">
               <p>You've connected to a <span className="font-mono font-semibold text-i3x-primary">v0</span> i3X Server.</p>
-              <p>The <strong>v1 release is now in Beta</strong> — support for v0 will be dropped soon. Please migrate your server to the v1 spec.</p>
+              <p>The <strong>v1 release is now available</strong> — support for v0 will be dropped soon. Please migrate your server to the v1 spec.</p>
               <p>
                 Find more details at{' '}
                 <a
@@ -275,11 +276,21 @@ export function Toolbar() {
                   www.i3x.dev
                 </a>
               </p>
+              <label className="flex items-start gap-2 cursor-pointer select-none mt-2">
+                <input
+                  type="checkbox"
+                  checked={v0Acknowledged}
+                  onChange={e => setV0Acknowledged(e.target.checked)}
+                  className="mt-0.5 accent-i3x-primary shrink-0"
+                />
+                <span>I acknowledge I'm connecting to an out-of-date server and I have a plan to update it</span>
+              </label>
             </div>
             <div className="px-4 py-3 border-t border-i3x-border flex justify-end">
               <button
                 onClick={() => setShowV0Warning(false)}
-                className="px-4 py-1.5 text-sm bg-i3x-primary text-white rounded hover:bg-i3x-primary/80 transition-colors"
+                disabled={!v0Acknowledged}
+                className="px-4 py-1.5 text-sm bg-i3x-primary text-white rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed hover:enabled:bg-i3x-primary/80"
               >
                 Dismiss
               </button>
