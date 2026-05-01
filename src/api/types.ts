@@ -14,6 +14,8 @@ export interface ObjectType {
   sourceTypeId?: string
   version?: string | null
   related?: { relationshipType: string; types?: string[] } | null
+  // v1-beta: extendedAttributes; v1.0: renamed to schemaExtensions. Client normalizes to schemaExtensions.
+  schemaExtensions?: Record<string, unknown>
 }
 
 // RFC 4.1.4/4.1.5 - Relationship Type
@@ -46,6 +48,8 @@ export interface ObjectInstance extends ObjectInstanceMinimal {
   sourceRelationship?: string
   // v1: full metadata object passthrough (sourceTypeId, system, etc.)
   metadata?: Record<string, unknown>
+  // v1-beta: extendedAttributes; v1.0: renamed to schemaExtensions. Client normalizes to schemaExtensions.
+  schemaExtensions?: Record<string, unknown>
 }
 
 // RFC 4.2.1.1 - Last Known Value

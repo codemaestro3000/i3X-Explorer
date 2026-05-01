@@ -14,7 +14,8 @@ import type { Credentials } from '../stores/connection'
 
 export type ClientCredentials = Credentials
 
-export type ApiVersion = 'v0' | 'v1'
+// v0 = Alpha, v1-beta = v1 Beta, v1 = v1 Release (1.0+)
+export type ApiVersion = 'v0' | 'v1-beta' | 'v1'
 
 // #TODO: Discuss this nested payload format suggested by Dylan DuFresne as a potential alternative
 // Extracts value/quality/timestamp from either standard format or nested Data.Value format
@@ -45,6 +46,11 @@ function extractVQT(payload: Record<string, unknown>): { value: unknown; quality
 // Normalize to the ObjectInstance shape used throughout the app.
 function normalizeV1Object(raw: Record<string, unknown>): ObjectInstance {
   const metadata = (raw.metadata ?? {}) as Record<string, unknown>
+  // Beta called this extendedAttributes; 1.0 renamed it schemaExtensions. Accept both.
+  const schemaExtensions = (
+    metadata.schemaExtensions ?? metadata.extendedAttributes ??
+    raw.schemaExtensions ?? raw.extendedAttributes
+  ) as Record<string, unknown> | undefined
   return {
     elementId: raw.elementId as string,
     displayName: raw.displayName as string,
@@ -56,7 +62,8 @@ function normalizeV1Object(raw: Record<string, unknown>): ObjectInstance {
     description: (metadata.description as string) ?? undefined,
     relationships: (metadata.relationships ?? raw.relationships) as Record<string, unknown> | undefined,
     sourceRelationship: raw.sourceRelationship as string | undefined,
-    metadata: Object.keys(metadata).length > 0 ? metadata : undefined
+    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+    ...(schemaExtensions ? { schemaExtensions } : {})
   }
 }
 
@@ -108,11 +115,18 @@ export class I3XClient {
     return this.apiVersion
   }
 
-  private async request<T>(
+  // True for v1-beta and v1 (Release) — any server that speaks the v1 wire format
+  private isV1(): boolean {
+    return this.apiVersion === 'v1' || this.apiVersion === 'v1-beta'
+  }
+
+  // Returns parsed response body plus the raw HTTP status code.
+  // Use this when the caller needs to inspect the status (e.g. 206 Partial Content from /sync).
+  private async requestRaw<T>(
     method: string,
     path: string,
     body?: unknown
-  ): Promise<T> {
+  ): Promise<{ data: T; status: number }> {
     // Fix localhost IPv6 issue - Chromium may prefer IPv6 but servers often only listen on IPv4
     let url = `${this.baseUrl}${path}`
     if (url.includes('://localhost:')) {
@@ -135,27 +149,54 @@ export class I3XClient {
     }
 
     const response = await fetch(url, options)
+    const status = response.status
 
     if (!response.ok) {
       const errorText = await response.text()
-      throw new Error(`HTTP ${response.status}: ${errorText}`)
+      let errorMessage = `HTTP ${status}`
+      try {
+        const errorData = JSON.parse(errorText) as Record<string, unknown>
+        // 1.0: responseDetail.detail / responseDetail.title
+        // Beta: problemDetail.detail / problemDetail.title
+        // Alpha/v0: error.message / error.code
+        const detail = (errorData?.responseDetail ?? errorData?.problemDetail ?? errorData?.error) as Record<string, unknown> | undefined
+        if (detail) {
+          errorMessage += `: ${detail.detail ?? detail.message ?? detail.title ?? errorText}`
+        } else {
+          errorMessage += `: ${errorText}`
+        }
+      } catch {
+        errorMessage += `: ${errorText}`
+      }
+      throw new Error(errorMessage)
     }
 
     const data = await response.json()
 
     // v1 wraps single-value responses: {success: true, result: <data>}
     // POST bulk responses use {success, results: [...]} and are handled per-method.
-    if (this.apiVersion === 'v1' && data && typeof data === 'object') {
+    let unwrapped: unknown = data
+    if (this.isV1() && data && typeof data === 'object') {
       const d = data as Record<string, unknown>
       if ('result' in d && !('results' in d)) {
-        return d.result as T
+        unwrapped = d.result
       }
     }
 
-    return data as T
+    return { data: unwrapped as T, status }
+  }
+
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown
+  ): Promise<T> {
+    const { data } = await this.requestRaw<T>(method, path, body)
+    return data
   }
 
   // Detect API version by probing GET /info (v1 only). Falls back to v0.
+  // Distinguishes v1-beta from v1 (Release) by looking for a specVersion/version field in /info.
   private async detectVersion(): Promise<void> {
     try {
       let url = `${this.baseUrl}/info`
@@ -167,7 +208,24 @@ export class I3XClient {
       if (authHeader) headers['Authorization'] = authHeader
 
       const response = await fetch(url, { method: 'GET', headers })
-      this.apiVersion = response.ok ? 'v1' : 'v0'
+      if (!response.ok) {
+        this.apiVersion = 'v0'
+        return
+      }
+
+      // Try to read a version field from the /info body.
+      // 1.0 servers are expected to advertise specVersion / version / apiVersion >= "1.0".
+      try {
+        const body = await response.json() as Record<string, unknown>
+        // v1 wraps the payload: {success, result: {...}}; also accept unwrapped bodies
+        const info = (body.result ?? body) as Record<string, unknown>
+        const raw = (info.specVersion ?? info.version ?? info.apiVersion ?? '') as string
+        const major = parseFloat(raw)
+        this.apiVersion = (!isNaN(major) && major >= 1.0) ? 'v1' : 'v1-beta'
+      } catch {
+        // /info responded OK but body isn't useful — treat as Beta
+        this.apiVersion = 'v1-beta'
+      }
     } catch {
       this.apiVersion = 'v0'
     }
@@ -199,13 +257,13 @@ export class I3XClient {
   async getObjects(typeId?: string, includeMetadata = false, root?: boolean): Promise<ObjectInstance[]> {
     const params = new URLSearchParams()
     // v1 renamed the query param: typeId → typeElementId
-    if (typeId) params.set(this.apiVersion === 'v1' ? 'typeElementId' : 'typeId', typeId)
+    if (typeId) params.set(this.isV1() ? 'typeElementId' : 'typeId', typeId)
     // v1: always request metadata so namespaceUri (metadata.typeNamespaceUri) is present
-    params.set('includeMetadata', String(this.apiVersion === 'v1' ? true : includeMetadata))
+    params.set('includeMetadata', String(this.isV1() ? true : includeMetadata))
     // v1 supports root=true server-side; v0 doesn't have this param so we filter locally below.
-    if (root && this.apiVersion === 'v1') params.set('root', 'true')
+    if (root && this.isV1()) params.set('root', 'true')
     const raw = await this.request<Array<Record<string, unknown>>>('GET', `/objects?${params.toString()}`)
-    if (this.apiVersion === 'v1') {
+    if (this.isV1()) {
       return raw.map(normalizeV1Object)
     }
     const all = raw as unknown as ObjectInstance[]
@@ -216,9 +274,9 @@ export class I3XClient {
 
   async getObject(elementId: string, includeMetadata = false): Promise<ObjectInstance> {
     // v1: always request metadata so namespaceUri (metadata.typeNamespaceUri) is present
-    const params = `?includeMetadata=${this.apiVersion === 'v1' ? true : includeMetadata}`
+    const params = `?includeMetadata=${this.isV1() ? true : includeMetadata}`
     const raw = await this.request<Record<string, unknown>>('GET', `/objects/${encodeURIComponent(elementId)}${params}`)
-    if (this.apiVersion === 'v1') {
+    if (this.isV1()) {
       return normalizeV1Object(raw)
     }
     return raw as unknown as ObjectInstance
@@ -229,7 +287,7 @@ export class I3XClient {
     relationshipType?: string,
     includeMetadata = false
   ): Promise<ObjectInstance[]> {
-    if (this.apiVersion === 'v1') {
+    if (this.isV1()) {
       // v1: subscriptionId in body, camelCase field, bulk results response
       // Always include metadata so namespaceUri (metadata.typeNamespaceUri) is populated
       const raw = await this.request<unknown>('POST', '/objects/related', {
@@ -266,7 +324,7 @@ export class I3XClient {
   // Value Methods (RFC 4.2.1)
 
   async getValue(elementId: string, maxDepth = 1): Promise<LastKnownValue | null> {
-    if (this.apiVersion === 'v1') {
+    if (this.isV1()) {
       // v1: bulk results; flat {value, quality, timestamp} in result (no data array)
       const raw = await this.request<unknown>('POST', '/objects/value', { elementIds: [elementId], maxDepth })
       const results = extractV1BulkResults<Record<string, unknown>>(raw)
@@ -300,7 +358,7 @@ export class I3XClient {
   }
 
   async getValues(elementIds: string[], maxDepth = 1): Promise<LastKnownValue[]> {
-    if (this.apiVersion === 'v1') {
+    if (this.isV1()) {
       const raw = await this.request<unknown>('POST', '/objects/value', { elementIds, maxDepth })
       const results = extractV1BulkResults<Record<string, unknown>>(raw)
       return results
@@ -344,7 +402,7 @@ export class I3XClient {
       parentId: null,
       namespaceUri: ''
     }
-    if (this.apiVersion === 'v1') {
+    if (this.isV1()) {
       // v1: bulk results; history in result.values (not data).
       // isComposition was removed from v1 history responses (spec commit 32be7d7).
       const raw = await this.request<unknown>(
@@ -371,7 +429,7 @@ export class I3XClient {
   // Subscription Methods (RFC 4.2.3)
 
   async getSubscriptions(): Promise<GetSubscriptionsResponse> {
-    if (this.apiVersion === 'v1') {
+    if (this.isV1()) {
       // v1 has no list-all endpoint; caller must track IDs returned from createSubscription
       return { subscriptionIds: [] }
     }
@@ -389,7 +447,7 @@ export class I3XClient {
   }
 
   async deleteSubscription(subscriptionId: string): Promise<void> {
-    if (this.apiVersion === 'v1') {
+    if (this.isV1()) {
       // v1: DELETE replaced by POST /subscriptions/delete with IDs in body
       await this.request<unknown>('POST', '/subscriptions/delete', { subscriptionIds: [subscriptionId] })
     } else {
@@ -403,7 +461,7 @@ export class I3XClient {
     elementIds: string[],
     maxDepth = 1
   ): Promise<unknown> {
-    if (this.apiVersion === 'v1') {
+    if (this.isV1()) {
       // v1: subscriptionId moved from URL path to request body
       return this.request<unknown>('POST', '/subscriptions/register', { subscriptionId, elementIds, maxDepth })
     }
@@ -414,7 +472,7 @@ export class I3XClient {
     subscriptionId: string,
     elementIds: string[]
   ): Promise<unknown> {
-    if (this.apiVersion === 'v1') {
+    if (this.isV1()) {
       return this.request<unknown>('POST', '/subscriptions/unregister', { subscriptionId, elementIds })
     }
     return this.request<unknown>('POST', `/subscriptions/${subscriptionId}/unregister`, { elementIds })
@@ -423,13 +481,18 @@ export class I3XClient {
   async sync(subscriptionId: string): Promise<SyncResponseItem[]> {
     let raw: Array<Record<string, unknown>>
 
-    if (this.apiVersion === 'v1') {
+    if (this.isV1()) {
       // v1: subscriptionId in body; auto-unwrapped from {success, result: [...]}
+      // 1.0: server returns HTTP 206 when queue overflow caused update loss (partial content)
       const lastSeq = this.syncSequenceNumbers.get(subscriptionId)
-      raw = await this.request<Array<Record<string, unknown>>>('POST', '/subscriptions/sync', {
+      const { data, status } = await this.requestRaw<Array<Record<string, unknown>>>('POST', '/subscriptions/sync', {
         subscriptionId,
         ...(lastSeq !== undefined ? { lastSequenceNumber: lastSeq } : {})
       })
+      raw = data
+      if (status === 206) {
+        console.warn(`[i3x] sync 206: subscription ${subscriptionId} queue overflowed — some updates were dropped`)
+      }
     } else {
       raw = await this.request<Array<Record<string, unknown>>>('POST', `/subscriptions/${subscriptionId}/sync`)
     }
@@ -472,7 +535,7 @@ export class I3XClient {
   // v0: GET /subscriptions/{id}/stream
   // v1: POST /subscriptions/stream  (subscriptionId in body)
   getStreamConfig(subscriptionId: string): StreamConfig {
-    if (this.apiVersion === 'v1') {
+    if (this.isV1()) {
       return {
         url: `${this.baseUrl}/subscriptions/stream`,
         method: 'POST',

@@ -326,6 +326,29 @@ The explorer uses two top-level folders:
 - **Graph relationships**: All other relationships shown in RelationshipGraph component
 - Without these filters, cycles cause infinite loops/hangs
 
+### Multi-version Support
+The client handles three spec generations transparently. `ApiVersion = 'v0' | 'v1-beta' | 'v1'` is detected at connect time and drives all branching in `src/api/client.ts`.
+
+**Detection** — `detectVersion()` probes `GET /info`:
+- No `/info` (or non-2xx) → `'v0'`
+- `/info` OK, `result.specVersion` (or `version`/`apiVersion`) parses to ≥ 1.0 → `'v1'`
+- `/info` OK but no recognisable version field → `'v1-beta'`
+
+The toolbar badge shows **v0** (yellow), **v1 Beta** (blue), or **v1** (green).
+
+**Wire-format differences handled by the client:**
+
+| Concern | v0 (Alpha) | v1-beta (Beta) | v1 (Release) |
+|---------|-----------|----------------|--------------|
+| Response envelope | bare array/object | `{success, result}` | `{success, result}` |
+| Bulk results | keyed `{elementId: {data:[...]}}` | `{results:[{elementId,result}]}` | same as Beta |
+| Error body | `{error:{code,message}}` | `{problemDetail:{title,status,detail}}` | `{responseDetail:{title,status,detail}}` |
+| Subscription endpoints | `/{id}/register`, `DELETE /{id}` | `/register` + id in body, `POST /delete` | same as Beta |
+| Metadata extensions field | — | `extendedAttributes` | `schemaExtensions` |
+| `/sync` partial response | — | — | HTTP 206 = queue overflow, logs warning |
+
+`isV1()` (private helper) returns true for both `'v1-beta'` and `'v1'` — all v1 wire-format branching goes through it so Beta and Release share the same code paths. The `extendedAttributes` → `schemaExtensions` rename is normalised in `normalizeV1Object()`: both field names are accepted and always surfaced as `schemaExtensions` on `ObjectInstance`.
+
 ### SSE vs Polling
 - **SSE (QoS0)** is the default — real-time streaming via `GET /subscriptions/{id}/stream`
 - **Polling (QoS2)** available as fallback — uses `POST /subscriptions/{id}/sync`

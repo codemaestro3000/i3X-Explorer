@@ -234,9 +234,11 @@ export function Toolbar() {
           <span className={`text-xs font-mono px-1.5 py-0.5 rounded border ${
             apiVersion === 'v1'
               ? 'bg-i3x-success/10 text-i3x-success border-i3x-success/20'
+              : apiVersion === 'v1-beta'
+              ? 'bg-i3x-primary/10 text-i3x-primary border-i3x-primary/20'
               : 'bg-i3x-warning/10 text-i3x-warning border-i3x-warning/20'
           }`}>
-            {apiVersion}
+            {apiVersion === 'v1-beta' ? 'v1 Beta' : apiVersion}
           </span>
         )}
         {isConnected && credentials && (
