@@ -1,6 +1,6 @@
 # i3X Explorer
 
-The official cross-platform desktop application for browsing and monitoring I3X (Industrial Information Interface eXchange) API servers. Similar to [MQTT Explorer](https://mqtt-explorer.com/) but for the I3X protocol.
+The official cross-platform desktop application for browsing and monitoring [I3X](https://www.i3x.dev) (Industrial Information Interface eXchange) API servers. Similar to [MQTT Explorer](https://mqtt-explorer.com/) but for the [I3X protocol](https://www.github.com/cesmii/i3x).
 
 ![i3X Explorer](website/icon-64.png)
 
