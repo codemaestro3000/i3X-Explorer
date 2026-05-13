@@ -102,7 +102,9 @@ Windows signing uses **Azure Trusted Signing** (Microsoft-managed CA, ~$10/month
 .\scripts\build-sign-win.ps1
 ```
 
-The script builds the installer, auto-downloads the Azure Trusted Signing dlib from NuGet on first run (cached in `scripts\.azure-signing\`, git-ignored), then signs all `.exe` files.
+The script builds the installer, auto-downloads the Azure Trusted Signing dlib from NuGet on first run (cached in `scripts\.azure-signing\`, git-ignored), then signs and verifies all `.exe` files.
+
+The dlib version is pinned in `$DlibVersion` near the top of the script. Microsoft releases updates periodically — if SmartScreen warnings reappear on a previously-clean build, bump this value to the latest on [NuGet](https://www.nuget.org/packages/Microsoft.Trusted.Signing.Client). The script automatically detects a version mismatch, wipes the cache, and re-downloads.
 
 Credentials go in `scripts\set-azure-vars.ps1` (git-ignored; template at `scripts\set-azure-vars.example.ps1`):
 ```powershell
@@ -125,6 +127,21 @@ Full setup walkthrough: see `WINDOWS-SIGNING.md`.
 | macOS | `.dmg`, `.zip` (x64 & arm64) |
 | Windows | `.exe` installer, portable `.exe` |
 | Linux | `.AppImage`, `.tar.gz` (x64 & arm64) |
+
+### Linux AppImage Compatibility
+
+The Linux build uses a post-pack hook (`scripts/afterPackLinux.cjs`) that wraps the Electron binary with a small shell script. This is necessary because:
+
+- **SUID sandbox**: AppImages mount squashfs as a regular user, so `chrome-sandbox` loses its SUID bit. The wrapper injects `--no-sandbox` so Chromium doesn't abort.
+- **Wayland**: The wrapper sets `ELECTRON_OZONE_PLATFORM_HINT=auto` so Electron uses the native Wayland backend when `WAYLAND_DISPLAY` is present, rather than defaulting to XWayland (which GNOME on Wayland often fails to display).
+
+**GPU / VM environments**: `electron/main.ts` calls `app.disableHardwareAcceleration()` on Linux to avoid VA-API initialization failures on systems without working GPU drivers (e.g. VMware SVGA II). `ready-to-show` depends on the GPU compositor for first-paint and won't fire when hardware acceleration is disabled, so a `did-finish-load` fallback is used to show the window instead.
+
+**inotify watches**: If the app hangs silently on a Linux machine with many file-watching tools running (VS Code, JetBrains, Dropbox), the system inotify limit may be exhausted. Fix with:
+```bash
+sudo sysctl -w fs.inotify.max_user_watches=524288
+sudo sysctl -w fs.inotify.max_user_instances=512
+```
 
 ### Icon Generation
 
