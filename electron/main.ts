@@ -6,6 +6,13 @@ import { fileURLToPath } from 'url'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+// Must be called before app is ready. Prevents the GPU process from starting,
+// which avoids VA-API initialization failures on Linux VMs and systems without
+// working GPU drivers (e.g. VMware SVGA II has no VA-API driver).
+if (process.platform === 'linux') {
+  app.disableHardwareAcceleration()
+}
+
 // Set the app name for macOS menu bar (overrides package.json "name")
 app.setName('i3X Explorer')
 
