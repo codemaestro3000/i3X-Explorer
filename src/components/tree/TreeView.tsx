@@ -301,7 +301,8 @@ function ObjectNode({
     (child) =>
       !filterText ||
       child.displayName.toLowerCase().includes(filterText) ||
-      child.elementId.toLowerCase().includes(filterText)
+      child.elementId.toLowerCase().includes(filterText) ||
+      child.namespaceUri.toLowerCase().includes(filterText)
   )
 
   // Prevent infinite recursion - depth limit or cycle detection
@@ -510,19 +511,20 @@ export function TreeView() {
     expandNode(HIERARCHICAL_FOLDER_ID)
   }, [searchQuery])
 
-  // Filter based on search. To make deep matches surface their ancestors,
-  // we precompute three sets:
-  //   matchingTypeIds: type IDs that have ≥1 matching object (so the type and
-  //     its parent namespace stay visible even if their own names don't match)
-  //   hierarchyVisibleIds: object IDs to keep in the Hierarchy view —
-  //     every match plus every ancestor up the parentId chain
-  //   matchedNamespaceUris: namespace URIs reached transitively via matching
-  //     types/objects (so a namespace whose name doesn't match still renders
-  //     when something inside it does)
-  const filterText = searchQuery.toLowerCase()
-  const objMatches = (obj: ObjectInstance) =>
-    obj.displayName.toLowerCase().includes(filterText) ||
-    obj.elementId.toLowerCase().includes(filterText)
+   // Filter based on search. To make deep matches surface their ancestors,
+   // we precompute three sets:
+   //   matchingTypeIds: type IDs that have ≥1 matching object (so the type and
+   //     its parent namespace stay visible even if their own names don't match)
+   //   hierarchyVisibleIds: object IDs to keep in the Hierarchy view —
+   //     every match plus every ancestor up the parentId chain
+   //   matchedNamespaceUris: namespace URIs reached transitively via matching
+   //     types/objects (so a namespace whose name doesn't match still renders
+   //     when something inside it does)
+   const filterText = searchQuery.toLowerCase()
+   const objMatches = (obj: ObjectInstance) =>
+     obj.displayName.toLowerCase().includes(filterText) ||
+     obj.elementId.toLowerCase().includes(filterText) ||
+     obj.namespaceUri.toLowerCase().includes(filterText)
 
   const matchingTypeIds = new Set<string>()
   const hierarchyVisibleIds = new Set<string>()
@@ -630,66 +632,67 @@ export function TreeView() {
               depth={1}
               hasChildren={hasTypes}
             >
-              {nsTypes.map((type) => {
-                const typeObjects = objects.get(type.elementId) ?? []
-                const filteredObjects = typeObjects.filter(
-                  (obj) =>
-                    !filterText ||
-                    obj.displayName.toLowerCase().includes(filterText) ||
-                    obj.elementId.toLowerCase().includes(filterText)
-                )
-                const instanceCount = objectCountByType.get(type.elementId)
+               {nsTypes.map((type) => {
+                 const typeObjects = objects.get(type.elementId) ?? []
+                 const filteredObjects = typeObjects.filter(
+                   (obj) =>
+                     !filterText ||
+                     obj.displayName.toLowerCase().includes(filterText) ||
+                     obj.elementId.toLowerCase().includes(filterText) ||
+                     obj.namespaceUri.toLowerCase().includes(filterText)
+                 )
+                 const instanceCount = objectCountByType.get(type.elementId)
 
-                return (
-                  <TreeNode
-                    key={type.elementId}
-                    id={`type:${type.elementId}`}
-                    label={type.displayName}
-                    count={instanceCount && instanceCount > 0 ? instanceCount : undefined}
-                    type="objectType"
-                    data={type}
-                    depth={2}
-                    hasChildren={true}
-                  >
-                    {filteredObjects.map((obj) => (
-                      <ObjectNode
-                        key={obj.elementId}
-                        obj={obj}
-                        depth={3}
-                        filterText={filterText}
-                      />
-                    ))}
-                  </TreeNode>
-                )
-              })}
+                 return (
+                   <TreeNode
+                     key={type.elementId}
+                     id={`type:${type.elementId}`}
+                     label={type.displayName}
+                     count={instanceCount && instanceCount > 0 ? instanceCount : undefined}
+                     type="objectType"
+                     data={type}
+                     depth={2}
+                     hasChildren={true}
+                   >
+                     {filteredObjects.map((obj) => (
+                       <ObjectNode
+                         key={obj.elementId}
+                         obj={obj}
+                         depth={3}
+                         filterText={filterText}
+                       />
+                     ))}
+                   </TreeNode>
+                 )
+               })}
             </TreeNode>
-          )
-        })}
-      </TreeNode>
+           )
+         })}
+       </TreeNode>
 
-      {/* Objects folder (flat list) */}
-      <TreeNode
-        id={OBJECTS_FOLDER_ID}
-        label="Objects"
-        count={allObjects.length > 0 ? allObjects.length : undefined}
-        type="folder"
-        depth={0}
-        hasChildren={true}
-      >
-        {filteredAllObjects.map((obj) => (
-          <ObjectNode
-            key={`all-${obj.elementId}`}
-            obj={obj}
-            depth={1}
-            filterText={filterText}
-          />
-        ))}
-        {allObjects.length > 0 && filteredAllObjects.length === 0 && (
-          <div className="text-i3x-text-muted text-sm py-2 pl-8">
-            No matching objects
-          </div>
-        )}
-      </TreeNode>
+       {/* Objects folder (flat list) */}
+       <TreeNode
+         id={OBJECTS_FOLDER_ID}
+         label="Objects"
+         count={allObjects.length > 0 ? allObjects.length : undefined}
+         type="folder"
+         depth={0}
+         hasChildren={true}
+       >
+         {filteredAllObjects.map((obj) => (
+           <ObjectNode
+             key={`all-${obj.elementId}`}
+             obj={obj}
+             depth={1}
+             filterText={filterText}
+           />
+         ))}
+         {allObjects.length > 0 && filteredAllObjects.length === 0 && (
+           <div className="text-i3x-text-muted text-sm py-2 pl-8">
+             No matching objects
+           </div>
+         )}
+       </TreeNode>
 
       {/* Hierarchical folder (parent/child structure) */}
       <TreeNode
