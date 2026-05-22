@@ -9,6 +9,9 @@ echo "[i3x] Node: $(node --version), npm: $(npm --version)"
 
 cd "$REPO_DIR"
 
+echo "[i3x] Pulling latest code..."
+git pull
+
 echo "[i3x] Installing dependencies..."
 npm ci --prefer-offline
 

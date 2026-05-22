@@ -93,8 +93,8 @@ This starts a Vite dev server at http://localhost:5173/ where you can access the
 Note: The best environment to build for all platforms is a modern macOS, however to sign the Windows binaries, you will have to build on Windows.
 
 ```bash
-# Best way to build (mac/linux/all)
-./scripts/build-all.sh [mac|win|linux|all]
+# Best way to build (mac/linux/web/all)
+./scripts/build-all.sh [mac|win|linux|web|all]
 
 # Manually Build for current platform
 npm run build
@@ -103,12 +103,59 @@ npm run build
 npm run build:mac          # macOS (Intel + Apple Silicon)
 npm run build:win          # Windows (x64, x86, portable) — unsigned
 npm run build:linux        # Linux (AppImage x64 + ARM64)
+npm run build:web          # Web (static files → dist-web/)
 npm run build:all          # All platforms
 ```
 
-Build artifacts are output to `release/{version}/`.
+Build artifacts are output to `release/{version}/`. The web build produces a `i3x-explorer-{version}-web.zip` ready to extract on any static web server.
 
 > **Note:** `build-all.sh win` and `npm run build:win` produce unsigned Windows builds. For signed Windows builds (required to suppress SmartScreen), use the dedicated PowerShell script on a Windows machine — see [Windows Signing](#windows-signing) below.
+
+### Web Deployment
+
+The web build (`./scripts/build-all.sh web`) produces a `dist-web/` directory of static files that can be served by any web server (nginx, Apache, Caddy, S3, etc.).
+
+#### Pre-populating the server list with `config.json`
+
+On first visit (before the user has saved any settings), the app fetches `config.json` from the same directory as `index.html`. You can use this to point users at your server automatically instead of having them type a URL.
+
+Create a `config.json` alongside `index.html` on the web server:
+
+```json
+{
+  "serverUrl": "https://your-i3x-server.example.com/v1",
+  "recentUrls": [
+    "https://your-i3x-server.example.com/v1",
+    "https://api.i3x.dev/v1"
+  ]
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `serverUrl` | Pre-fills the Server URL field in the connection dialog |
+| `recentUrls` | Pre-populates the Recent Connections list |
+
+`config.json` is only applied on a user's **first visit**. Once they have saved settings in their browser, `config.json` is ignored — their local preferences take priority.
+
+The default `config.json` shipped in `dist-web/` points at `https://api.i3x.dev/v1`. Replace it (or delete it) as needed for your deployment.
+
+#### Deploying from a synced git repo
+
+If your server has the repo cloned and uses `scripts/deploy-web.sh` to build and serve the app, create a `config.local.json` at the root of the repo. The deploy script copies it over `dist-web/config.json` automatically after each build, so it survives rebuilds without being committed to git:
+
+```bash
+# On the server, create once:
+cat > /home/cesmii/repos/i3X-Explorer/config.local.json <<'EOF'
+{
+  "serverUrl": "https://your-i3x-server.example.com/v1",
+  "recentUrls": ["https://your-i3x-server.example.com/v1"]
+}
+EOF
+
+# Then rebuild:
+sudo systemctl restart i3x-explorer-web
+```
 
 ### macOS Notarization
 
