@@ -160,8 +160,20 @@ export class SSESubscription {
       const rawData = JSON.parse(dataStr) as Array<Record<string, unknown>>
       const items: SyncResponseItem[] = []
       for (const entry of rawData) {
-        if (typeof entry.elementId === 'string') {
-          // v1 flat format: {elementId, value, quality, timestamp}
+        if (Array.isArray(entry.updates)) {
+          // v1 release batch format: {sequenceNumber, updates: [{elementId, value, quality, timestamp}]}
+          for (const update of entry.updates as Array<Record<string, unknown>>) {
+            if (typeof update.elementId === 'string') {
+              items.push({
+                elementId: update.elementId,
+                value: update.value,
+                quality: (update.quality as string | null) ?? null,
+                timestamp: (update.timestamp as string | null) ?? null
+              })
+            }
+          }
+        } else if (typeof entry.elementId === 'string') {
+          // v1-beta flat format: {elementId, value, quality, timestamp}
           items.push({
             elementId: entry.elementId,
             value: entry.value,

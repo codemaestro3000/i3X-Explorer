@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useExplorerStore } from '../../stores/explorer'
 import { getClient } from '../../api/client'
 import type { ObjectInstance } from '../../api/types'
@@ -37,7 +37,14 @@ export function SearchModal({ onClose }: SearchModalProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
-  const { selectItem, setAllObjects, setHierarchicalRoots } = useExplorerStore()
+  const { selectItem, setAllObjects, setHierarchicalRoots, objectTypes } = useExplorerStore()
+  const typeIndex = useMemo(() => new Map(objectTypes.map(t => [t.elementId, t])), [objectTypes])
+  const SCALAR_TYPES = useMemo(() => new Set(['number', 'integer', 'string', 'boolean']), [])
+  const isLeafType = (typeId: string) => {
+    const raw = typeIndex.get(typeId)?.schema?.type
+    const t = Array.isArray(raw) ? (raw as string[]).find(x => SCALAR_TYPES.has(x)) ?? '' : String(raw ?? '')
+    return SCALAR_TYPES.has(t)
+  }
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -219,7 +226,7 @@ export function SearchModal({ onClose }: SearchModalProps) {
                   }`}
                 >
                   <span className="text-base flex-shrink-0 mt-0.5">
-                    {result.object.isComposition ? '📦' : '📊'}
+                    {isLeafType(result.object.typeId) ? '📊' : '📦'}
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">

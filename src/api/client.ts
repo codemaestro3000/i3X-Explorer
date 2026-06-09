@@ -89,6 +89,8 @@ export class I3XClient {
   private apiVersion: ApiVersion = 'v0'
   // Track last seen sequence number per subscription for v1 sync acknowledgment
   private syncSequenceNumbers = new Map<string, number>()
+  // clientId generated at createSubscription time; required by all subsequent v1 subscription ops
+  private clientIds = new Map<string, string>()
 
   constructor(baseUrl: string, credentials?: ClientCredentials | null) {
     this.baseUrl = baseUrl.replace(/\/$/, '')
@@ -234,10 +236,6 @@ export class I3XClient {
     return this.request<ObjectType[]>('GET', `/objecttypes${params}`)
   }
 
-  async getObjectType(elementId: string): Promise<ObjectType> {
-    return this.request<ObjectType>('GET', `/objecttypes/${encodeURIComponent(elementId)}`)
-  }
-
   async getRelationshipTypes(namespaceUri?: string): Promise<RelationshipType[]> {
     const params = namespaceUri ? `?namespaceUri=${encodeURIComponent(namespaceUri)}` : ''
     // RelationshipType shape is compatible between v0 and v1 (extra fields ignored)
@@ -262,13 +260,19 @@ export class I3XClient {
     return all
   }
 
-  async getObject(elementId: string, includeMetadata = false): Promise<ObjectInstance> {
-    // v1: always request metadata so namespaceUri (metadata.typeNamespaceUri) is present
-    const params = `?includeMetadata=${this.isV1() ? true : includeMetadata}`
-    const raw = await this.request<Record<string, unknown>>('GET', `/objects/${encodeURIComponent(elementId)}${params}`)
+  async getObject(elementId: string): Promise<ObjectInstance> {
     if (this.isV1()) {
-      return normalizeV1Object(raw)
+      // v1: GET /objects/{id} removed; use POST /objects/list with single elementId
+      const raw = await this.request<unknown>('POST', '/objects/list', {
+        elementIds: [elementId],
+        includeMetadata: true
+      })
+      const results = extractV1BulkResults<Record<string, unknown>>(raw)
+      const item = results.find(r => r.elementId === elementId && r.success)
+      if (item?.result) return normalizeV1Object(item.result)
+      throw new Error(`Object ${elementId} not found`)
     }
+    const raw = await this.request<Record<string, unknown>>('GET', `/objects/${encodeURIComponent(elementId)}`)
     return raw as unknown as ObjectInstance
   }
 
@@ -354,15 +358,15 @@ export class I3XClient {
       const results = extractV1BulkResults<Record<string, unknown>>(raw)
       const item = results.find(r => r.elementId === elementId && r.success)
       if (item?.result) {
-        // isComposition was removed from v1 value responses (spec commit 32be7d7);
-        // infer it from the presence of the components field instead.
+        // v1 spec includes isComposition in the result; fall back to inferring from
+        // components presence for v1-beta servers that may not include it.
         return {
           elementId,
           value: item.result.value as Record<string, unknown>,
           quality: item.result.quality as string | undefined,
           timestamp: item.result.timestamp as string | undefined,
           parentId: null,
-          isComposition: 'components' in item.result,
+          isComposition: (item.result.isComposition as boolean | undefined) ?? ('components' in item.result),
           components: item.result.components as LastKnownValue['components'],
           namespaceUri: ''
         } as LastKnownValue
@@ -393,7 +397,7 @@ export class I3XClient {
           quality: r.result.quality as string | undefined,
           timestamp: r.result.timestamp as string | undefined,
           parentId: null,
-          isComposition: 'components' in r.result,
+          isComposition: (r.result.isComposition as boolean | undefined) ?? ('components' in r.result),
           components: r.result.components as LastKnownValue['components'],
           namespaceUri: ''
         } as LastKnownValue))
@@ -463,11 +467,15 @@ export class I3XClient {
   async createSubscription(): Promise<CreateSubscriptionResponse> {
     // v0: {subscriptionId, message}
     // v1: auto-unwrapped from {success, result: {clientId, subscriptionId, displayName}}
-    // v1 (1.0): client must supply a cryptographically random clientId (issue #27)
-    const body = this.isV1()
-      ? { clientId: crypto.randomUUID() }
-      : {}
-    const response = await this.request<Record<string, unknown>>('POST', '/subscriptions', body)
+    // v1: client MUST supply a cryptographically random clientId; store it for all subsequent ops
+    if (this.isV1()) {
+      const clientId = crypto.randomUUID()
+      const response = await this.request<Record<string, unknown>>('POST', '/subscriptions', { clientId })
+      const subscriptionId = String(response.subscriptionId)
+      this.clientIds.set(subscriptionId, clientId)
+      return { subscriptionId, message: 'Subscription created' }
+    }
+    const response = await this.request<Record<string, unknown>>('POST', '/subscriptions', {})
     return {
       subscriptionId: String(response.subscriptionId),
       message: (response.message as string | undefined) ?? 'Subscription created'
@@ -476,12 +484,13 @@ export class I3XClient {
 
   async deleteSubscription(subscriptionId: string): Promise<void> {
     if (this.isV1()) {
-      // v1: DELETE replaced by POST /subscriptions/delete with IDs in body
-      await this.request<unknown>('POST', '/subscriptions/delete', { subscriptionIds: [subscriptionId] })
+      const clientId = this.clientIds.get(subscriptionId)
+      await this.request<unknown>('POST', '/subscriptions/delete', { clientId, subscriptionIds: [subscriptionId] })
     } else {
       await this.request<unknown>('DELETE', `/subscriptions/${subscriptionId}`)
     }
     this.syncSequenceNumbers.delete(subscriptionId)
+    this.clientIds.delete(subscriptionId)
   }
 
   async registerMonitoredItems(
@@ -490,8 +499,8 @@ export class I3XClient {
     maxDepth = 1
   ): Promise<unknown> {
     if (this.isV1()) {
-      // v1: subscriptionId moved from URL path to request body
-      return this.request<unknown>('POST', '/subscriptions/register', { subscriptionId, elementIds, maxDepth })
+      const clientId = this.clientIds.get(subscriptionId)
+      return this.request<unknown>('POST', '/subscriptions/register', { clientId, subscriptionId, elementIds, maxDepth })
     }
     return this.request<unknown>('POST', `/subscriptions/${subscriptionId}/register`, { elementIds, maxDepth })
   }
@@ -501,7 +510,8 @@ export class I3XClient {
     elementIds: string[]
   ): Promise<unknown> {
     if (this.isV1()) {
-      return this.request<unknown>('POST', '/subscriptions/unregister', { subscriptionId, elementIds })
+      const clientId = this.clientIds.get(subscriptionId)
+      return this.request<unknown>('POST', '/subscriptions/unregister', { clientId, subscriptionId, elementIds })
     }
     return this.request<unknown>('POST', `/subscriptions/${subscriptionId}/unregister`, { elementIds })
   }
@@ -513,7 +523,9 @@ export class I3XClient {
       // v1: subscriptionId in body; auto-unwrapped from {success, result: [...]}
       // 1.0: server returns HTTP 206 when queue overflow caused update loss (partial content)
       const lastSeq = this.syncSequenceNumbers.get(subscriptionId)
+      const clientId = this.clientIds.get(subscriptionId)
       const { data, status } = await this.requestRaw<Array<Record<string, unknown>>>('POST', '/subscriptions/sync', {
+        clientId,
         subscriptionId,
         ...(lastSeq !== undefined ? { lastSequenceNumber: lastSeq } : {})
       })
@@ -527,8 +539,23 @@ export class I3XClient {
 
     const items: SyncResponseItem[] = []
     for (const entry of raw ?? []) {
-      if (typeof entry.elementId === 'string') {
-        // v1 flat format: {elementId, value, quality, timestamp}
+      if (Array.isArray(entry.updates)) {
+        // v1 release batch format: {sequenceNumber, updates: [{elementId, value, quality, timestamp}]}
+        const batchSeq = entry.sequenceNumber as number | undefined
+        if (typeof batchSeq === 'number') {
+          const current = this.syncSequenceNumbers.get(subscriptionId) ?? -1
+          if (batchSeq > current) this.syncSequenceNumbers.set(subscriptionId, batchSeq)
+        }
+        for (const update of entry.updates as Array<Record<string, unknown>>) {
+          items.push({
+            elementId: update.elementId as string,
+            value: update.value,
+            quality: (update.quality as string | null) ?? null,
+            timestamp: (update.timestamp as string | null) ?? null
+          })
+        }
+      } else if (typeof entry.elementId === 'string') {
+        // v1-beta flat format: {elementId, value, quality, timestamp, sequenceNumber}
         const seq = entry.sequenceNumber
         if (typeof seq === 'number') {
           const current = this.syncSequenceNumbers.get(subscriptionId) ?? -1
@@ -564,10 +591,11 @@ export class I3XClient {
   // v1: POST /subscriptions/stream  (subscriptionId in body)
   getStreamConfig(subscriptionId: string): StreamConfig {
     if (this.isV1()) {
+      const clientId = this.clientIds.get(subscriptionId)
       return {
         url: `${this.baseUrl}/subscriptions/stream`,
         method: 'POST',
-        postBody: { subscriptionId }
+        postBody: { clientId, subscriptionId }
       }
     }
     return {

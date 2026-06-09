@@ -24,8 +24,7 @@ const POLL_OPTIONS = [
 export function Toolbar() {
   const [theme, setTheme] = useState<Theme>(getInitialTheme)
   const [apiVersion, setApiVersion] = useState<ApiVersion | null>(null)
-  const [showV0Warning, setShowV0Warning] = useState(false)
-  const [v0Acknowledged, setV0Acknowledged] = useState(false)
+  const [showV0Blocked, setShowV0Blocked] = useState(false)
   const [showSettingsMenu, setShowSettingsMenu] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
 
@@ -80,10 +79,15 @@ export function Toolbar() {
       const success = await client.testConnection()
 
       if (success) {
-        setConnected(true)
         const detectedVersion = client.getApiVersion()
+        if (detectedVersion === 'v0') {
+          destroyClient()
+          setConnecting(false)
+          setShowV0Blocked(true)
+          return
+        }
+        setConnected(true)
         setApiVersion(detectedVersion)
-        if (detectedVersion === 'v0') { setV0Acknowledged(false); setShowV0Warning(true) }
         addRecentUrl(serverUrl)
 
         // Load initial data
@@ -243,11 +247,9 @@ export function Toolbar() {
           <span className={`text-xs font-mono px-1.5 py-0.5 rounded border ${
             apiVersion === 'v1'
               ? 'bg-i3x-success/10 text-i3x-success border-i3x-success/20'
-              : apiVersion === 'v1-beta'
-              ? 'bg-i3x-primary/10 text-i3x-primary border-i3x-primary/20'
-              : 'bg-i3x-error/10 text-i3x-error border-i3x-error/20 animate-pulse'
+              : 'bg-orange-500/10 text-orange-400 border-orange-500/20'
           }`}>
-            {apiVersion === 'v1-beta' ? 'v1 Beta' : apiVersion === 'v0' ? 'v0 (Deprecated)' : apiVersion}
+            {apiVersion === 'v1-beta' ? 'v1 Beta' : apiVersion}
           </span>
         )}
         {isConnected && credentials && (
@@ -263,18 +265,18 @@ export function Toolbar() {
 
       {showSearch && <SearchModal onClose={() => setShowSearch(false)} />}
 
-      {showV0Warning && (
+      {showV0Blocked && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-i3x-surface rounded-lg shadow-xl w-full max-w-md border border-i3x-border">
             <div className="px-4 py-3 border-b border-i3x-border flex items-center gap-2">
-              <span className="text-i3x-warning text-base">⚠️</span>
-              <h2 className="text-sm font-semibold text-i3x-text">Deprecation Warning</h2>
+              <span className="text-i3x-error text-base">🚫</span>
+              <h2 className="text-sm font-semibold text-i3x-text">Unsupported API Version</h2>
             </div>
             <div className="p-4 space-y-3 text-sm text-i3x-text">
-              <p>You've connected to a <span className="font-mono font-semibold text-i3x-primary">v0</span> i3X Server.</p>
-              <p>The <strong>v1 release is now available</strong> — support for v0 will be dropped soon. Please migrate your server to the v1 spec.</p>
+              <p>This server implements the <span className="font-mono font-semibold text-i3x-error">v0</span> Alpha API, which is no longer supported.</p>
+              <p>i3X Explorer requires <strong>v1</strong> or later. Please upgrade your server to the v1 spec before connecting.</p>
               <p>
-                Find more details at{' '}
+                Find migration details at{' '}
                 <a
                   href="https://www.i3x.dev"
                   target="_blank"
@@ -284,23 +286,13 @@ export function Toolbar() {
                   www.i3x.dev
                 </a>
               </p>
-              <label className="flex items-start gap-2 cursor-pointer select-none mt-2">
-                <input
-                  type="checkbox"
-                  checked={v0Acknowledged}
-                  onChange={e => setV0Acknowledged(e.target.checked)}
-                  className="mt-0.5 accent-i3x-primary shrink-0"
-                />
-                <span>I acknowledge I'm connecting to an out-of-date server and I have a plan to update it</span>
-              </label>
             </div>
             <div className="px-4 py-3 border-t border-i3x-border flex justify-end">
               <button
-                onClick={() => setShowV0Warning(false)}
-                disabled={!v0Acknowledged}
-                className="px-4 py-1.5 text-sm bg-i3x-primary text-white rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed hover:enabled:bg-i3x-primary/80"
+                onClick={() => setShowV0Blocked(false)}
+                className="px-4 py-1.5 text-sm bg-i3x-primary text-white rounded transition-colors hover:bg-i3x-primary/80"
               >
-                Dismiss
+                OK
               </button>
             </div>
           </div>

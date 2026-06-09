@@ -56,24 +56,19 @@ const VariableClassIcon = () => <span>📊</span>
 
 const SCALAR_TYPES = new Set(['number', 'integer', 'string', 'boolean'])
 
+// Per the i3X Implementation Guide: schema.type is the sole authoritative leaf signal.
+// scalar type (number/integer/string/boolean) → leaf (📊); everything else → branch (📦).
+// schema.type may be a union array (e.g. ["number","null"]) — treat as leaf if any member is scalar.
 function bucketInstance(
   obj: ObjectInstance | undefined,
   typeIndex?: Map<string, ObjectType>
-): 'object' | 'variable' | 'other' {
+): 'variable' | 'other' {
   if (!obj) return 'other'
-  const sys = (obj.metadata?.system ?? {}) as Record<string, unknown>
-  const nodeClass = String(sys.nodeClass ?? '').toLowerCase()
-  if (nodeClass.startsWith('object')) return 'object'
-  if (nodeClass.startsWith('variable')) return 'variable'
-  if (nodeClass) return 'other'
-  // Fallback when nodeClass isn't reported: heuristic on typeId / sourceTypeId.
-  const t = `${obj.typeId} ${String(obj.metadata?.sourceTypeId ?? '')}`.toLowerCase()
-  if (/(variable|tag|datapoint|dataitem|measurement|sensor)/.test(t)) return 'variable'
-  if (/(object|device|equipment|asset|machine|component)/.test(t)) return 'object'
-  // Final fallback: scalar schema.type on the Object Type is the i3X-native leaf signal.
-  const schemaType = String(typeIndex?.get(obj.typeId)?.schema?.type ?? '')
-  if (SCALAR_TYPES.has(schemaType)) return 'variable'
-  return 'other'
+  const raw = typeIndex?.get(obj.typeId)?.schema?.type
+  const schemaType = Array.isArray(raw)
+    ? (raw as string[]).find(t => SCALAR_TYPES.has(t)) ?? ''
+    : String(raw ?? '')
+  return SCALAR_TYPES.has(schemaType) ? 'variable' : 'other'
 }
 const NamespaceIcon = () => <span className="text-i3x-primary">🌐</span>
 const TypeIcon = () => <span className="text-i3x-success">📃</span>
