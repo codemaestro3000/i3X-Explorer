@@ -483,14 +483,20 @@ export class I3XClient {
   }
 
   async deleteSubscription(subscriptionId: string): Promise<void> {
-    if (this.isV1()) {
-      const clientId = this.clientIds.get(subscriptionId)
-      await this.request<unknown>('POST', '/subscriptions/delete', { clientId, subscriptionIds: [subscriptionId] })
-    } else {
-      await this.request<unknown>('DELETE', `/subscriptions/${subscriptionId}`)
+    // Purge local state even if the server request fails — callers delete
+    // subscriptions that may already be expired server-side (404), and the
+    // clientId/sequence entries must not outlive the subscription locally.
+    try {
+      if (this.isV1()) {
+        const clientId = this.clientIds.get(subscriptionId)
+        await this.request<unknown>('POST', '/subscriptions/delete', { clientId, subscriptionIds: [subscriptionId] })
+      } else {
+        await this.request<unknown>('DELETE', `/subscriptions/${subscriptionId}`)
+      }
+    } finally {
+      this.syncSequenceNumbers.delete(subscriptionId)
+      this.clientIds.delete(subscriptionId)
     }
-    this.syncSequenceNumbers.delete(subscriptionId)
-    this.clientIds.delete(subscriptionId)
   }
 
   async registerMonitoredItems(
