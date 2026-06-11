@@ -98,7 +98,7 @@ export const useConnectionStore = create<ConnectionState>()(
       isConnecting: false,
       error: null,
       showConnectionDialog: false,
-      recentUrls: ['https://api.i3x.dev/v1', 'https://api.i3x.dev/v0', 'http://localhost:8080'],
+      recentUrls: ['https://api.i3x.dev/v1', 'http://localhost:8080'],
       ignoreCertErrors: false,
 
       setServerUrl: (url) => set({ serverUrl: url }),

@@ -50,6 +50,7 @@ export class SSESubscription {
   private url: string
   private credentials: ClientCredentials | null
   private postBody: object | undefined
+  private failFastStatuses: number[]
   private onData: SubscriptionCallback
   private onError: ErrorCallback
   private reconnectAttempts = 0
@@ -64,7 +65,11 @@ export class SSESubscription {
     credentials?: ClientCredentials | null,
     // If provided, the stream is opened with POST + JSON body (v1).
     // If omitted, uses GET (v0).
-    postBody?: object
+    postBody?: object,
+    // Additional HTTP statuses that bypass the reconnect loop and surface
+    // immediately via onError (404/410 always do). e.g. [501] for 1.0 Release
+    // servers, where 501 means streaming is permanently unsupported.
+    failFastStatuses: number[] = []
   ) {
     // Fix localhost IPv6 issue - Chromium may prefer IPv6 but servers often only listen on IPv4
     this.url = url.includes('://localhost:')
@@ -74,6 +79,7 @@ export class SSESubscription {
     this.onError = onError
     this.credentials = credentials ?? null
     this.postBody = postBody
+    this.failFastStatuses = failFastStatuses
   }
 
   connect(): void {
@@ -103,8 +109,9 @@ export class SSESubscription {
 
       if (!response.ok) {
         const err = new HttpStatusError(response.status, response.statusText)
-        // 404/410 means the subscription is gone — retrying will always fail
-        if (response.status === 404 || response.status === 410) {
+        // 404/410 means the subscription is gone — retrying will always fail.
+        // failFastStatuses (e.g. 501 = streaming unsupported) are equally permanent.
+        if (response.status === 404 || response.status === 410 || this.failFastStatuses.includes(response.status)) {
           this.onError(err)
           return
         }

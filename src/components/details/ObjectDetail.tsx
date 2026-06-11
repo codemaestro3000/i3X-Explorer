@@ -38,7 +38,11 @@ export function ObjectDetail({ object }: ObjectDetailProps) {
     setValueError(null)
 
     try {
-      const result = await client.getValue(object.elementId)
+      // 1.0 Release: composition objects return child values under "components"
+      // when queried with maxDepth=0 (infinite recursion through HasComponent).
+      // Beta/pre-release servers keep the default maxDepth=1 behavior untouched.
+      const maxDepth = client.getApiVersion() === 'v1' && object.isComposition ? 0 : 1
+      const result = await client.getValue(object.elementId, maxDepth)
       setValue(result)
     } catch (err) {
       setValueError(err instanceof Error ? err.message : 'Failed to load value')

@@ -136,6 +136,11 @@ html, body, #root {
   @apply text-i3x-error;
 }
 
-.quality-unknown {
+.quality-uncertain {
   @apply text-i3x-warning;
+}
+
+/* Quality strings outside the normative enum (Good | GoodNoData | Bad | Uncertain) */
+.quality-unknown {
+  @apply text-i3x-secondary;
 }

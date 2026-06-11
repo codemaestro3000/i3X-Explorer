@@ -7,7 +7,8 @@ import type {
   HistoricalValue,
   CreateSubscriptionResponse,
   SyncResponseItem,
-  GetSubscriptionsResponse
+  GetSubscriptionsResponse,
+  ServerCapabilities
 } from './types'
 import { buildAuthHeaders } from './auth'
 
@@ -91,6 +92,8 @@ export class I3XClient {
   private syncSequenceNumbers = new Map<string, number>()
   // clientId generated at createSubscription time; required by all subsequent v1 subscription ops
   private clientIds = new Map<string, string>()
+  // Capabilities matrix from GET /info; captured at connect, consumed only for v1 (Release) servers
+  private capabilities: ServerCapabilities | null = null
 
   constructor(baseUrl: string, credentials?: ClientCredentials | null) {
     this.baseUrl = baseUrl.replace(/\/$/, '')
@@ -109,9 +112,24 @@ export class I3XClient {
     return this.apiVersion
   }
 
+  getCapabilities(): ServerCapabilities | null {
+    return this.capabilities
+  }
+
   // True for v1-beta and v1 (Release) — any server that speaks the v1 wire format
   private isV1(): boolean {
     return this.apiVersion === 'v1' || this.apiVersion === 'v1-beta'
+  }
+
+  // 1.0: a 206 bulk response carries a top-level responseDetail explaining the
+  // server-imposed limit that truncated the result (e.g. composition tree depth)
+  private extractPartialDetail(raw: unknown): string {
+    if (raw && typeof raw === 'object') {
+      const detail = (raw as Record<string, unknown>).responseDetail as Record<string, unknown> | undefined
+      const text = (detail?.detail ?? detail?.title) as string | undefined
+      if (text) return text
+    }
+    return 'A server-imposed limit truncated this result'
   }
 
   // Returns parsed response body plus the raw HTTP status code.
@@ -222,6 +240,11 @@ export class I3XClient {
         const body = await response.json() as Record<string, unknown>
         // v1 wraps the payload: {success, result: {...}}; also accept unwrapped bodies
         const info = (body.result ?? body) as Record<string, unknown>
+        // Capture the capabilities matrix (mandatory in 1.0 ServerInfo).
+        // Stored for any server that provides it; consumers gate on getApiVersion() === 'v1'.
+        if (info.capabilities && typeof info.capabilities === 'object') {
+          this.capabilities = info.capabilities as ServerCapabilities
+        }
         const serverVersion = String(info.serverVersion ?? '').toLowerCase()
         const specRaw = (info.specVersion ?? info.version ?? info.apiVersion ?? '') as string
         const specMajor = parseFloat(specRaw)
@@ -367,7 +390,12 @@ export class I3XClient {
   async getValue(elementId: string, maxDepth = 1): Promise<LastKnownValue | null> {
     if (this.isV1()) {
       // v1: bulk results; flat {value, quality, timestamp} in result (no data array)
-      const raw = await this.request<unknown>('POST', '/objects/value', { elementIds: [elementId], maxDepth })
+      const { data: raw, status } = await this.requestRaw<unknown>('POST', '/objects/value', { elementIds: [elementId], maxDepth })
+      // 1.0: HTTP 206 = server-imposed limit truncated the composition tree;
+      // the top-level responseDetail explains the limit. Release servers only.
+      const partialDetail = this.apiVersion === 'v1' && status === 206
+        ? this.extractPartialDetail(raw)
+        : undefined
       const results = extractV1BulkResults<Record<string, unknown>>(raw)
       const item = results.find(r => r.elementId === elementId && r.success)
       if (item?.result) {
@@ -381,7 +409,8 @@ export class I3XClient {
           parentId: null,
           isComposition: (item.result.isComposition as boolean | undefined) ?? ('components' in item.result),
           components: item.result.components as LastKnownValue['components'],
-          namespaceUri: ''
+          namespaceUri: '',
+          ...(partialDetail ? { partialDetail } : {})
         } as LastKnownValue
       }
       return null
@@ -400,7 +429,10 @@ export class I3XClient {
 
   async getValues(elementIds: string[], maxDepth = 1): Promise<LastKnownValue[]> {
     if (this.isV1()) {
-      const raw = await this.request<unknown>('POST', '/objects/value', { elementIds, maxDepth })
+      const { data: raw, status } = await this.requestRaw<unknown>('POST', '/objects/value', { elementIds, maxDepth })
+      const partialDetail = this.apiVersion === 'v1' && status === 206
+        ? this.extractPartialDetail(raw)
+        : undefined
       const results = extractV1BulkResults<Record<string, unknown>>(raw)
       return results
         .filter(r => r.success && r.result)
@@ -412,7 +444,8 @@ export class I3XClient {
           parentId: null,
           isComposition: (r.result.isComposition as boolean | undefined) ?? ('components' in r.result),
           components: r.result.components as LastKnownValue['components'],
-          namespaceUri: ''
+          namespaceUri: '',
+          ...(partialDetail ? { partialDetail } : {})
         } as LastKnownValue))
     }
     // v0

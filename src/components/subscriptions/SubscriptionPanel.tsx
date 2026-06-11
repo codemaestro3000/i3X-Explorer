@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSubscriptionsStore } from '../../stores/subscriptions'
 import { useConnectionStore } from '../../stores/connection'
-import { getClient } from '../../api/client'
-import { SSESubscription, PollingSubscription, isSubscriptionGoneError } from '../../api/subscription'
+import { getClient, type I3XClient } from '../../api/client'
+import { SSESubscription, PollingSubscription, HttpStatusError, isSubscriptionGoneError } from '../../api/subscription'
 import { TrendView } from './TrendView'
 import type { SyncResponseItem } from '../../api/types'
 
@@ -102,6 +102,29 @@ export function SubscriptionPanel() {
     }
   }
 
+  // 1.0 Release servers declare streaming support in /info capabilities;
+  // when it's false the stream endpoint returns 501 and polling is the only transport.
+  const isStreamUnsupported = (client: I3XClient): boolean =>
+    client.getApiVersion() === 'v1' && client.getCapabilities()?.subscribe?.stream === false
+
+  const startPolling = (subscriptionId: string, client: I3XClient) => {
+    // Use polling (QoS2) - more reliable, works with CORS
+    pollingRef.current = new PollingSubscription(
+      () => client.sync(subscriptionId),
+      handleDataUpdate,
+      (error) => {
+        if (isSubscriptionGoneError(error)) {
+          handleRecovery(subscriptionId)
+        } else {
+          console.error('Polling error:', error)
+          setStreaming(subscriptionId, false)
+        }
+      },
+      2000 // Poll every 2 seconds
+    )
+    pollingRef.current.start()
+  }
+
   const handleStartStream = async (subscriptionId: string) => {
     const client = getClient()
     if (!client) return
@@ -110,22 +133,11 @@ export function SubscriptionPanel() {
     sseRef.current?.disconnect()
     pollingRef.current?.stop()
 
-    if (usePolling) {
-      // Use polling (QoS2) - more reliable, works with CORS
-      pollingRef.current = new PollingSubscription(
-        () => client.sync(subscriptionId),
-        handleDataUpdate,
-        (error) => {
-          if (isSubscriptionGoneError(error)) {
-            handleRecovery(subscriptionId)
-          } else {
-            console.error('Polling error:', error)
-            setStreaming(subscriptionId, false)
-          }
-        },
-        2000 // Poll every 2 seconds
-      )
-      pollingRef.current.start()
+    const isRelease = client.getApiVersion() === 'v1'
+
+    if (usePolling || isStreamUnsupported(client)) {
+      if (!usePolling) setUsePolling(true)
+      startPolling(subscriptionId, client)
     } else {
       // Use SSE (QoS0) - real-time but may have CORS issues
       // v0: GET /subscriptions/{id}/stream  v1: POST /subscriptions/stream
@@ -136,13 +148,20 @@ export function SubscriptionPanel() {
         (error) => {
           if (isSubscriptionGoneError(error)) {
             handleRecovery(subscriptionId)
+          } else if (isRelease && error instanceof HttpStatusError && error.status === 501) {
+            // 1.0: 501 = streaming permanently unsupported — fall back to polling
+            console.warn('Server does not support SSE streaming (HTTP 501), falling back to polling')
+            setUsePolling(true)
+            startPolling(subscriptionId, client)
           } else {
             console.error('SSE error:', error)
             setStreaming(subscriptionId, false)
           }
         },
         client.getCredentials(),
-        streamConfig.postBody
+        streamConfig.postBody,
+        // 1.0: 501 is permanent; don't burn reconnect attempts on it
+        isRelease ? [501] : []
       )
       sseRef.current.connect()
     }
@@ -173,6 +192,9 @@ export function SubscriptionPanel() {
       console.error('Failed to delete subscription:', err)
     }
   }
+
+  const connectedClient = getClient()
+  const streamUnsupported = connectedClient ? isStreamUnsupported(connectedClient) : false
 
   const subscriptionList = Array.from(subscriptions.values())
 
@@ -224,12 +246,15 @@ export function SubscriptionPanel() {
               </h3>
               <div className="flex items-center gap-2">
                 {/* Polling/SSE toggle */}
-                <label className="flex items-center gap-1 text-xs text-i3x-text-muted">
+                <label
+                  className="flex items-center gap-1 text-xs text-i3x-text-muted"
+                  title={streamUnsupported ? 'This server does not support SSE streaming (capabilities.subscribe.stream = false)' : undefined}
+                >
                   <input
                     type="checkbox"
-                    checked={usePolling}
+                    checked={usePolling || streamUnsupported}
                     onChange={(e) => setUsePolling(e.target.checked)}
-                    disabled={subscriptions.get(activeSubscriptionId)?.isStreaming}
+                    disabled={subscriptions.get(activeSubscriptionId)?.isStreaming || streamUnsupported}
                     className="w-3 h-3"
                   />
                   Poll
@@ -239,7 +264,7 @@ export function SubscriptionPanel() {
                     onClick={() => handleStartStream(activeSubscriptionId)}
                     className="px-3 py-1 text-xs bg-i3x-success/20 text-i3x-success rounded hover:bg-i3x-success/30 transition-colors"
                   >
-                    Start {usePolling ? 'Polling' : 'Stream'}
+                    Start {usePolling || streamUnsupported ? 'Polling' : 'Stream'}
                   </button>
                 ) : (
                   <button

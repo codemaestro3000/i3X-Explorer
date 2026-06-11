@@ -52,6 +52,14 @@ export interface ObjectInstance extends ObjectInstanceMinimal {
   schemaExtensions?: Record<string, unknown>
 }
 
+// Server capabilities matrix from GET /info (1.0 Release spec).
+// All fields optional defensively — only consumed when a true v1 server is detected.
+export interface ServerCapabilities {
+  query?: { history?: boolean }
+  update?: { current?: boolean; history?: boolean }
+  subscribe?: { stream?: boolean }
+}
+
 // RFC 4.2.1.1 - Last Known Value
 export interface LastKnownValue {
   elementId: string
@@ -65,6 +73,9 @@ export interface LastKnownValue {
   timestamp?: string
   quality?: string
   components?: Record<string, { value: unknown; quality?: string; timestamp?: string }>
+  // 1.0: set when the server returned HTTP 206 (server-imposed limit truncated
+  // the composition tree); carries responseDetail.detail explaining the limit
+  partialDetail?: string
 }
 
 // RFC 4.2.1.2 - Historical Value
