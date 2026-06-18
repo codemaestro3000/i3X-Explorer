@@ -30,7 +30,6 @@ const TIMESPAN_OPTIONS: TimespanOption[] = [
   { value: '6h', label: '6 hours', ms: 6 * 60 * 60 * 1000 },
   { value: '24h', label: '24 hours', ms: 24 * 60 * 60 * 1000 },
   { value: '7d', label: '7 days', ms: 7 * 24 * 60 * 60 * 1000 },
-  { value: '30d', label: '30 days', ms: 30 * 24 * 60 * 60 * 1000 },
   { value: 'custom', label: 'Custom range' }
 ]
 
