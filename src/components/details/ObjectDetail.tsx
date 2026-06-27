@@ -15,6 +15,7 @@ export function ObjectDetail({ object }: ObjectDetailProps) {
   const [isLoadingValue, setIsLoadingValue] = useState(false)
   const [valueError, setValueError] = useState<string | null>(null)
   const [isRawDataExpanded, setIsRawDataExpanded] = useState(false)
+  const [valueView, setValueView] = useState<'parsed' | 'raw'>('parsed')
 
   const [isSubscribing, setIsSubscribing] = useState(false)
   const [subscribeError, setSubscribeError] = useState<string | null>(null)
@@ -195,20 +196,37 @@ export function ObjectDetail({ object }: ObjectDetailProps) {
         <div className="xl:flex-1">
           <div className="flex items-center justify-between mb-1">
             <label className="text-xs text-i3x-text-muted">Current Value</label>
-            <button
-              onClick={loadValue}
-              disabled={isLoadingValue}
-              className="text-xs text-i3x-primary hover:text-i3x-primary/80"
-            >
-              {isLoadingValue ? 'Loading...' : 'Refresh'}
-            </button>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center rounded border border-i3x-border overflow-hidden text-xs">
+                {(['parsed', 'raw'] as const).map(mode => (
+                  <button
+                    key={mode}
+                    onClick={() => setValueView(mode)}
+                    className={`px-2 py-0.5 transition-colors ${
+                      valueView === mode
+                        ? 'bg-i3x-primary text-white'
+                        : 'text-i3x-text-muted hover:text-i3x-text hover:bg-i3x-bg/50'
+                    }`}
+                  >
+                    {mode === 'parsed' ? 'Parsed' : 'Raw'}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={loadValue}
+                disabled={isLoadingValue}
+                className="text-xs text-i3x-primary hover:text-i3x-primary/80"
+              >
+                {isLoadingValue ? 'Loading...' : 'Refresh'}
+              </button>
+            </div>
           </div>
           {valueError ? (
             <div className="px-3 py-2 bg-i3x-error/10 border border-i3x-error/20 rounded text-sm text-i3x-error">
               {valueError}
             </div>
           ) : value ? (
-            <ValueDisplay value={value} />
+            <ValueDisplay value={value} view={valueView} />
           ) : (
             <div className="px-3 py-2 bg-i3x-surface rounded text-sm text-i3x-text-muted">
               {isLoadingValue ? 'Loading...' : 'No value available'}

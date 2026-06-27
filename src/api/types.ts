@@ -76,6 +76,9 @@ export interface LastKnownValue {
   // 1.0: set when the server returned HTTP 206 (server-imposed limit truncated
   // the composition tree); carries responseDetail.detail explaining the limit
   partialDetail?: string
+  // Untouched HTTP response body for this value request (full envelope), retained
+  // so the detail pane can offer a "Raw" view alongside the parsed value.
+  rawResponse?: unknown
 }
 
 // RFC 4.2.1.2 - Historical Value

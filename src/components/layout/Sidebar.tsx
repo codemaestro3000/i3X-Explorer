@@ -45,8 +45,8 @@ export function Sidebar() {
       className="bg-i3x-surface border-r border-i3x-border flex"
       style={{ width: `${width}px`, minWidth: '224px', maxWidth: '480px' }}
     >
-      {/* Tree content */}
-      <div className="flex-1 overflow-auto p-2 flex flex-col">
+      {/* Tree content — TreeView owns its own scroll area (both axes) */}
+      <div className="flex-1 min-w-0 min-h-0 overflow-hidden p-2 flex flex-col">
         {!isConnected ? (
           <div className="flex items-center justify-center h-full text-i3x-text-muted text-sm">
             Connect to a server to browse

@@ -410,6 +410,7 @@ export class I3XClient {
           isComposition: (item.result.isComposition as boolean | undefined) ?? ('components' in item.result),
           components: item.result.components as LastKnownValue['components'],
           namespaceUri: '',
+          rawResponse: raw,
           ...(partialDetail ? { partialDetail } : {})
         } as LastKnownValue
       }
@@ -422,7 +423,7 @@ export class I3XClient {
     const entry = response[elementId]
     if (entry?.data?.[0]) {
       const vqt = extractVQT(entry.data[0])
-      return { elementId, ...vqt } as LastKnownValue
+      return { elementId, ...vqt, rawResponse: response } as LastKnownValue
     }
     return null
   }

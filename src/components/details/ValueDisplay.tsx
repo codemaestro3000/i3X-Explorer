@@ -3,6 +3,8 @@ import { JsonViewer } from './JsonViewer'
 
 interface ValueDisplayProps {
   value: LastKnownValue
+  /** 'parsed' (default) shows the formatted value; 'raw' shows the full HTTP response body. */
+  view?: 'parsed' | 'raw'
 }
 
 // Normative quality enum (1.0): Good | GoodNoData | Bad | Uncertain.
@@ -21,9 +23,26 @@ function formatComponentValue(v: unknown): string {
   return String(v)
 }
 
-export function ValueDisplay({ value }: ValueDisplayProps) {
+export function ValueDisplay({ value, view = 'parsed' }: ValueDisplayProps) {
   const qualityLabel = value.quality ?? 'Unknown'
   const components = value.components ? Object.entries(value.components) : []
+
+  // Raw view: the untouched server response body. Falls back to the normalized
+  // value object for sources that don't retain a raw body (e.g. live updates).
+  if (view === 'raw') {
+    return (
+      <div className="bg-i3x-surface rounded overflow-hidden">
+        {value.partialDetail && (
+          <div className="px-3 py-1.5 bg-i3x-warning/10 border-b border-i3x-warning/20 text-xs text-i3x-warning">
+            ⚠ Partial result: {value.partialDetail}
+          </div>
+        )}
+        <div className="p-3">
+          <JsonViewer data={value.rawResponse ?? value} initialExpanded={true} />
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="bg-i3x-surface rounded overflow-hidden">

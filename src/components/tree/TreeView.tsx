@@ -242,7 +242,7 @@ function TreeNode({ id, label, type, data, depth, hasChildren, count, children }
         )}
         {!hasChildren && <span className="w-4" />}
         <span className="flex-shrink-0">{getIcon()}</span>
-        <span className="truncate text-sm">{label}</span>
+        <span className="whitespace-nowrap text-sm">{label}</span>
         {/* All counts render on the right edge of the row. Leader line is
             solid when the row is expanded (the count is "active"), dashed
             otherwise. */}
@@ -604,9 +604,10 @@ export function TreeView() {
   }, [allObjects])
 
   return (
-    <div className="text-i3x-text">
-      {/* Filter input */}
-      <div className="sticky top-0 z-10 bg-i3x-surface pb-2 mb-1">
+    <div className="flex flex-col h-full min-h-0 text-i3x-text">
+      {/* Filter input — fixed header so it stays put (and full-width) while the
+          tree body scrolls horizontally */}
+      <div className="shrink-0 bg-i3x-surface pb-2 mb-1">
         <input
           type="text"
           value={searchQuery}
@@ -616,6 +617,12 @@ export function TreeView() {
         />
       </div>
 
+      {/* Tree body — scrolls both axes. The inner w-max wrapper grows to the
+          widest row so long labels/deep nesting extend a horizontal scrollbar,
+          while min-w-full keeps rows (highlights, count leader-lines) panel-wide
+          when content fits. */}
+      <div className="flex-1 min-h-0 overflow-auto">
+       <div className="w-max min-w-full">
       {/* Namespaces folder */}
       <TreeNode
         id={NAMESPACES_FOLDER_ID}
@@ -733,6 +740,8 @@ export function TreeView() {
           {searchQuery ? 'No results found' : 'Connect to a server to browse'}
         </div>
       )}
+       </div>
+      </div>
     </div>
   )
 }
