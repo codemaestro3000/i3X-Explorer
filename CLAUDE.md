@@ -158,9 +158,9 @@ The `scripts/generate-icons.sh` script generates platform-specific icons:
 - Connect to I3X servers (default: https://api.i3x.dev/v1)
 - Ignore certificate errors checkbox in connection dialog (Electron only) — for self-signed / dev servers; persisted across restarts
 - Browse hierarchical tree: Namespaces → ObjectTypes → Objects
-- Browse flat Objects list (lazy-loaded)
+- Browse flat Objects list (lazy-loaded, virtualized — only rows near the viewport are mounted, so tens of thousands of objects stay responsive)
 - Expand compositional objects to see children
-- Tree auto-refresh: expanding a branch always re-fetches from the server; 30s background poll refreshes all expanded branches
+- Tree auto-refresh: expanding a branch re-fetches from the server (full-catalog refetches are coalesced/throttled on large sets); 30s background poll refreshes all expanded branches
 - View object details, metadata, and current values
 - Current Value pane has a **Parsed / Raw** toggle — Raw shows the untouched HTTP response body; for composition objects the component rows middle-truncate the elementId and round numeric values, with full id/value/timestamp on hover
 - Copy-to-clipboard floating icon on every JSON pane (object data, schema, raw value, etc.)
@@ -432,9 +432,13 @@ location / {
 ```
 
 ### Tree Refresh
-- Expanding any branch always re-fetches from the server (no stale cache)
-- Hierarchy nodes (`hier:` prefix) re-fetch `allObjects` on expand — important for MQTT adapters that discover objects dynamically as topics arrive
+- Expanding any branch re-fetches from the server (no stale cache)
+- Hierarchy nodes (`hier:` prefix) re-fetch `allObjects` on expand — important for MQTT adapters that discover objects dynamically as topics arrive. These full-catalog refetches are coalesced/throttled (`refreshAllObjects` in `TreeView.tsx`, `ALL_OBJECTS_REFETCH_TTL_MS`): concurrent expands share one in-flight request and a fresh fetch is skipped if one ran within the window, so rapidly expanding many nodes on a large catalog doesn't trigger a full refetch per click. Opening the Objects/Hierarchy folder and the background poll force a fresh fetch, so freshness is preserved.
 - A 30-second background poll refreshes all currently-expanded branches while connected (controlled by `BACKGROUND_POLL_ENABLED` in `TreeView.tsx`)
+- `allObjects` is indexed by `parentId` into `childrenByParent` in the store when set, so the hierarchy view resolves each node's children with an O(1) map lookup instead of scanning the full object list per node. `objectTypes` is likewise indexed into `typeIndex` (shared by every node for icon bucketing). Tree nodes use narrow store selectors so a single node's expand/select doesn't re-render the whole tree.
+- The tree is split into focused modules under `src/components/tree/`: `treeData.ts` (non-JSX shared logic — `resolveCompositionFlags`, `refreshAllObjects`, `flattenObjectForest`, `hasCompositionChildren`, `getObjectLabel`, folder-id/`MAX_TREE_DEPTH` constants), `TreeNode.tsx` (the leaf row component + icons), `VirtualObjectRows.tsx` (the windowed Objects list), and `TreeView.tsx` (`ObjectNode`, `HierarchicalObjectNode`, and the `TreeView` shell). Dependencies point one way into `treeData`/`TreeNode`, so there is no import cycle.
+- The flat Objects folder is **virtualized** (`VirtualObjectRows` in `src/components/tree/VirtualObjectRows.tsx`, using `@tanstack/react-virtual`). Its visible forest (flat objects plus any expanded compositional descendants) is flattened into one linear array by `flattenObjectForest` and windowed against the shared tree scroll container via `scrollMargin`, so only rows in/near the viewport mount — a catalog of tens of thousands of objects no longer renders every row at once. Rows render in normal flow with top/bottom spacer padding (not absolute positioning) so the existing horizontal scroll, hover, selection, and count leader-lines are preserved; row height is measured once from the first mounted row. Expansion state lives in the store, so expanded rows survive being scrolled out of the window.
+- **Composition chevrons resolve lazily for the visible window.** `hasCompositionChildren` shows a chevron optimistically for any unresolved `isComposition` object; `VirtualObjectRows` then resolves the real qualifying-child count for the rows currently in view (small debounced `resolveCompositionFlags` batch), so a composition object whose components are all leaves loses its (dead) chevron without the user clicking. The whole catalog is never resolved in one batch (that batch is slow/unreliable at 58k and left chevrons wrong). Expanding an object also writes its real child count back to the cache, so a click self-corrects the chevron as a backstop.
 
 ### Theme System
 - Colors are defined as CSS custom properties (space-separated RGB channels) in `src/styles/index.css`

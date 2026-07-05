@@ -31,6 +31,14 @@ interface ExplorerState {
   // via batched POST /objects/related so it never disagrees with the render
   // filter applied at expansion time. Also drives chevron state (count > 0).
   compositionCache: Map<string, number>
+  // elementId → its object type, rebuilt once whenever objectTypes changes.
+  // Shared by every tree node for icon bucketing so a node never has to build
+  // a Map over all object types on its own.
+  typeIndex: Map<string, ObjectType>
+  // parentId → its direct children, rebuilt once whenever allObjects changes.
+  // The hierarchy view looks up children here in O(1) instead of scanning the
+  // entire allObjects array (O(n)) on every node.
+  childrenByParent: Map<string, ObjectInstance[]>
   expandedNodes: Set<string>
   selectedItem: SelectedItem | null
   isLoading: boolean
@@ -66,6 +74,8 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   hierarchicalRoots: [],
   childObjects: new Map(),
   compositionCache: new Map(),
+  typeIndex: new Map(),
+  childrenByParent: new Map(),
   expandedNodes: new Set(),
   selectedItem: null,
   isLoading: false,
@@ -75,7 +85,10 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   sidebarCollapsed: false,
 
   setNamespaces: (namespaces) => set({ namespaces }),
-  setObjectTypes: (types) => set({ objectTypes: types }),
+  setObjectTypes: (types) => set({
+    objectTypes: types,
+    typeIndex: new Map(types.map(t => [t.elementId, t])),
+  }),
 
   setObjects: (typeId, objects) => {
     const current = get().objects
@@ -84,7 +97,20 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
     set({ objects: updated })
   },
 
-  setAllObjects: (objects) => set({ allObjects: objects }),
+  setAllObjects: (objects) => {
+    // Index children by parentId once here so the hierarchy view can resolve a
+    // node's children with a single Map lookup instead of filtering the whole
+    // list per node.
+    const childrenByParent = new Map<string, ObjectInstance[]>()
+    for (const o of objects) {
+      const pid = o.parentId
+      if (!pid) continue
+      const arr = childrenByParent.get(pid)
+      if (arr) arr.push(o)
+      else childrenByParent.set(pid, [o])
+    }
+    set({ allObjects: objects, childrenByParent })
+  },
   setHierarchicalRoots: (roots) => set({ hierarchicalRoots: roots }),
 
   setChildObjects: (parentId, children) => {
@@ -141,6 +167,8 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
     hierarchicalRoots: [],
     childObjects: new Map(),
     compositionCache: new Map(),
+    typeIndex: new Map(),
+    childrenByParent: new Map(),
     expandedNodes: new Set(),
     selectedItem: null,
     isLoading: false,

@@ -1,292 +1,22 @@
-import { useCallback, useEffect, useMemo } from 'react'
-import { useExplorerStore, type SelectedItem } from '../../stores/explorer'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useExplorerStore } from '../../stores/explorer'
 import { useConnectionStore } from '../../stores/connection'
-import { getClient, type I3XClient } from '../../api/client'
-import type { Namespace, ObjectType, ObjectInstance } from '../../api/types'
-
-// After loading a layer of objects, decide chevron state for each compositional
-// parent by asking the server what /objects/related actually returns — i.e. the
-// same data the render filter sees at expansion time. Single batch round trip.
-// Awaiting this before committing layer state ensures chevrons render correctly
-// on first paint instead of flipping after a follow-up fetch.
-async function resolveCompositionFlags(client: I3XClient, loaded: ObjectInstance[]): Promise<void> {
-  if (loaded.length === 0) return
-  const { compositionCache, mergeCompositionFlags } = useExplorerStore.getState()
-  const toResolve: string[] = []
-  for (const obj of loaded) {
-    if (obj.isComposition && !compositionCache.has(obj.elementId)) {
-      toResolve.push(obj.elementId)
-    }
-  }
-  if (toResolve.length === 0) return
-  const additions = new Map<string, number>()
-  try {
-    const related = await client.getRelatedObjectsBatch(toResolve, 'HasComponent')
-    for (const parentId of toResolve) {
-      const children = related.get(parentId) ?? []
-      const qualifyingCount = children.filter(c =>
-        c.isComposition && c.elementId !== parentId && c.parentId === parentId
-      ).length
-      additions.set(parentId, qualifyingCount)
-    }
-  } catch (err) {
-    console.error('Failed to resolve composition flags via /objects/related:', err)
-  }
-  if (additions.size > 0) mergeCompositionFlags(additions)
-}
+import { getClient } from '../../api/client'
+import type { ObjectType, ObjectInstance } from '../../api/types'
+import { TreeNode } from './TreeNode'
+import { VirtualObjectRows } from './VirtualObjectRows'
+import {
+  resolveCompositionFlags,
+  refreshAllObjects,
+  hasCompositionChildren,
+  getObjectLabel,
+  MAX_TREE_DEPTH,
+  NAMESPACES_FOLDER_ID,
+  OBJECTS_FOLDER_ID,
+  HIERARCHICAL_FOLDER_ID,
+} from './treeData'
 
 const BACKGROUND_POLL_ENABLED = true
-
-// Icons
-const FolderIcon = () => (
-  <span style={{ filter: 'sepia(1) saturate(1.6) hue-rotate(-15deg) brightness(0.89)' }}>🗄️</span>
-)
-// 📁 emoji renders grey on some macOS configurations; sepia/saturate filter
-// forces a manilla tint while keeping the emoji aesthetic of the rest of the
-// tree.
-const FolderTypeIcon = () => (
-  <span style={{ filter: 'sepia(1) saturate(2) hue-rotate(-5deg) brightness(1.05)' }}>📁</span>
-)
-
-// Three lowest-common-denominator buckets for object instances that aren't
-// FolderType. Driven by OPC UA's nodeClass when available (carried through on
-// metadata.system.nodeClass), with a typeId/sourceTypeId keyword fallback.
-const ObjectClassIcon = () => <span>📦</span>
-const VariableClassIcon = () => <span>📊</span>
-
-const SCALAR_TYPES = new Set(['number', 'integer', 'string', 'boolean'])
-
-// Per the i3X Implementation Guide: schema.type is the sole authoritative leaf signal.
-// scalar type (number/integer/string/boolean) → leaf (📊); everything else → branch (📦).
-// schema.type may be a union array (e.g. ["number","null"]) — treat as leaf if any member is scalar.
-function bucketInstance(
-  obj: ObjectInstance | undefined,
-  typeIndex?: Map<string, ObjectType>
-): 'variable' | 'other' {
-  if (!obj) return 'other'
-  const raw = typeIndex?.get(obj.typeId)?.schema?.type
-  const schemaType = Array.isArray(raw)
-    ? (raw as string[]).find(t => SCALAR_TYPES.has(t)) ?? ''
-    : String(raw ?? '')
-  return SCALAR_TYPES.has(schemaType) ? 'variable' : 'other'
-}
-const NamespaceIcon = () => <span className="text-i3x-primary">🌐</span>
-const TypeIcon = () => <span className="text-i3x-success">📃</span>
-const ChevronRight = () => <span className="text-i3x-text-muted">›</span>
-const ChevronDown = () => <span className="text-i3x-text-muted">⌄</span>
-
-// Special folder IDs
-const NAMESPACES_FOLDER_ID = 'folder:namespaces'
-const OBJECTS_FOLDER_ID = 'folder:objects'
-const HIERARCHICAL_FOLDER_ID = 'folder:hierarchical'
-
-interface TreeNodeProps {
-  id: string
-  label: string
-  type: 'namespace' | 'objectType' | 'object' | 'folder'
-  data?: Namespace | ObjectType | ObjectInstance
-  depth: number
-  hasChildren?: boolean
-  // Optional minimalist count badge rendered to the right of the label —
-  // small, muted, no brackets. Only rendered when defined.
-  count?: number
-  children?: React.ReactNode
-}
-
-function TreeNode({ id, label, type, data, depth, hasChildren, count, children }: TreeNodeProps) {
-  const { expandedNodes, selectedItem, toggleNode, selectItem, setObjects, setAllObjects, setHierarchicalRoots, setChildObjects, objectTypes } = useExplorerStore()
-
-  const isExpanded = expandedNodes.has(id)
-  const isSelected = selectedItem?.id === id
-
-  const typeIndex = useMemo(
-    () => new Map(objectTypes.map(t => [t.elementId, t])),
-    [objectTypes]
-  )
-
-  const handleClick = useCallback(async () => {
-    // Select the item
-    if (data && type !== 'folder') {
-      selectItem({ type, id, data } as SelectedItem)
-    }
-
-    // Toggle expansion
-    if (hasChildren) {
-      toggleNode(id)
-
-      // Re-fetch objects for this type whenever expanding (always fresh)
-      if (type === 'objectType' && !isExpanded) {
-        const client = getClient()
-        if (client) {
-          try {
-            const objectType = data as ObjectType
-            const objects = await client.getObjects(objectType.elementId)
-            await resolveCompositionFlags(client, objects)
-            setObjects(objectType.elementId, objects)
-          } catch (err) {
-            console.error('Failed to load objects:', err)
-          }
-        }
-      }
-
-      // Re-fetch all objects whenever expanding Objects or Hierarchy folder (always fresh)
-      if ((id === OBJECTS_FOLDER_ID || id === HIERARCHICAL_FOLDER_ID) && !isExpanded) {
-        const client = getClient()
-        if (client) {
-          try {
-            const objects = await client.getObjects()
-            await resolveCompositionFlags(client, objects)
-            setAllObjects(objects)
-          } catch (err) {
-            console.error('Failed to load all objects:', err)
-          }
-        }
-      }
-
-      // For the Hierarchy folder, also fetch root objects via root=true so the server
-      // determines what counts as a root (avoids relying on parentId === '/' locally)
-      if (id === HIERARCHICAL_FOLDER_ID && !isExpanded) {
-        const client = getClient()
-        if (client) {
-          try {
-            const roots = await client.getObjects(undefined, false, true)
-            await resolveCompositionFlags(client, roots)
-            setHierarchicalRoots(roots)
-          } catch (err) {
-            console.error('Failed to load root objects:', err)
-          }
-        }
-      }
-
-      // Re-fetch all objects when expanding a hierarchy node (picks up newly discovered objects)
-      if (id.startsWith('hier:') && !isExpanded) {
-        const client = getClient()
-        if (client) {
-          try {
-            const objects = await client.getObjects()
-            await resolveCompositionFlags(client, objects)
-            setAllObjects(objects)
-          } catch (err) {
-            console.error('Failed to refresh objects for hierarchy node:', err)
-          }
-        }
-      }
-
-      // Re-fetch child objects whenever expanding a compositional object (always fresh)
-      if (type === 'object' && !isExpanded && !id.startsWith('hier:')) {
-        const obj = data as ObjectInstance
-        if (obj.isComposition) {
-          const client = getClient()
-          if (client) {
-            try {
-              const related = await client.getRelatedObjects(obj.elementId, 'HasComponent')
-              const compositionalChildren = related.filter(child =>
-                child.isComposition &&
-                child.elementId !== obj.elementId &&
-                child.parentId === obj.elementId
-              )
-              await resolveCompositionFlags(client, compositionalChildren)
-              setChildObjects(obj.elementId, compositionalChildren)
-            } catch (err) {
-              console.error('Failed to load child objects:', err)
-            }
-          }
-        }
-      }
-    }
-  }, [data, type, id, hasChildren, isExpanded, selectItem, toggleNode, setObjects, setAllObjects, setHierarchicalRoots, setChildObjects])
-
-  const getIcon = () => {
-    switch (type) {
-      case 'namespace':
-        return <NamespaceIcon />
-      case 'objectType': {
-        // ObjectType definitions whose source resolves to OPC UA FolderType
-        // render as a folder.
-        const t = data as ObjectType | undefined
-        const src = (t?.sourceTypeId ?? '').toLowerCase()
-        const id = (t?.elementId ?? '').toLowerCase()
-        if (src.includes('foldertype') || id.includes('foldertype')) return <FolderTypeIcon />
-        return <TypeIcon />
-      }
-      case 'object': {
-        const obj = data as ObjectInstance | undefined
-        // FolderType instances always render as a folder.
-        const typeId = (obj?.typeId ?? '').toLowerCase()
-        const metaSrc = String(obj?.metadata?.sourceTypeId ?? '').toLowerCase()
-        if (typeId.includes('foldertype') || metaSrc.includes('foldertype')) {
-          return <FolderTypeIcon />
-        }
-        // Otherwise bucket into one of three lowest-common-denominator classes.
-        switch (bucketInstance(obj, typeIndex)) {
-          case 'variable': return <VariableClassIcon />
-          default: return <ObjectClassIcon />
-        }
-      }
-      case 'folder':
-        return <FolderIcon />
-    }
-  }
-
-  return (
-    <div>
-      <div
-        className={`tree-node ${isSelected ? 'selected' : ''}`}
-        style={{ paddingLeft: `${depth * 16 + 8}px` }}
-        onClick={handleClick}
-      >
-        {hasChildren && (
-          <span className="w-4 flex-shrink-0">
-            {isExpanded ? <ChevronDown /> : <ChevronRight />}
-          </span>
-        )}
-        {!hasChildren && <span className="w-4" />}
-        <span className="flex-shrink-0">{getIcon()}</span>
-        <span className="whitespace-nowrap text-sm">{label}</span>
-        {/* All counts render on the right edge of the row. Leader line is
-            solid when the row is expanded (the count is "active"), dashed
-            otherwise. */}
-        {count !== undefined && (
-          <>
-            <div
-              className={`flex-1 self-center mx-2 h-0 border-t ${
-                isExpanded
-                  ? 'border-solid border-i3x-text-muted/40'
-                  : 'border-dashed border-i3x-text-muted/25'
-              }`}
-            />
-            <span className="pr-2 text-sm text-i3x-text-muted/60 tabular-nums flex-shrink-0">
-              {count}
-            </span>
-          </>
-        )}
-      </div>
-      {isExpanded && children}
-    </div>
-  )
-}
-
-// Max depth for tree rendering to prevent infinite loops
-const MAX_TREE_DEPTH = 20
-
-// Chevron predicate: consult the compositionCache, which holds the actual
-// child count resolved via batched /objects/related. If we haven't resolved
-// this object yet, fall back to its isComposition flag (chevron may show
-// momentarily until the resolver lands).
-function hasCompositionChildren(obj: ObjectInstance, cache: Map<string, number>): boolean {
-  if (!obj.isComposition) return false
-  const cached = cache.get(obj.elementId)
-  return cached === undefined ? true : cached > 0
-}
-
-// Get display label for an object, handling special cases like root "/"
-function getObjectLabel(obj: ObjectInstance): string {
-  if (obj.displayName && obj.displayName.trim()) {
-    return obj.displayName
-  }
-  // Fallback to elementId for objects with empty displayName (e.g., root "/")
-  return obj.elementId
-}
 
 // Recursive component for rendering objects with their children
 function ObjectNode({
@@ -359,21 +89,22 @@ function HierarchicalObjectNode({
   obj,
   depth,
   filterText,
-  allObjects,
+  childrenByParent,
   visibleIds,
   ancestors = new Set<string>()
 }: {
   obj: ObjectInstance
   depth: number
   filterText: string
-  allObjects: ObjectInstance[]
+  childrenByParent: Map<string, ObjectInstance[]>
   // When filterText is active, set of object IDs that should remain visible
   // (matches + their ancestors). Computed once at the TreeView level.
   visibleIds?: Set<string>
   ancestors?: Set<string>
 }) {
-  // Find children by filtering allObjects where parentId matches this object
-  const children = allObjects.filter(child => child.parentId === obj.elementId)
+  // Direct children via the prebuilt parentId index (O(1) lookup instead of
+  // scanning the entire allObjects array on every node).
+  const children = childrenByParent.get(obj.elementId) ?? []
   const filteredChildren = filterText
     ? children.filter(child => visibleIds?.has(child.elementId))
     : children
@@ -409,7 +140,7 @@ function HierarchicalObjectNode({
           obj={child}
           depth={depth + 1}
           filterText={filterText}
-          allObjects={allObjects}
+          childrenByParent={childrenByParent}
           visibleIds={visibleIds}
           ancestors={childAncestors}
         />
@@ -419,14 +150,33 @@ function HierarchicalObjectNode({
 }
 
 export function TreeView() {
-  const { namespaces, objectTypes, objects, allObjects, hierarchicalRoots, searchQuery, setSearchQuery, pollIntervalMs, manualRefreshTick } = useExplorerStore()
+  // Narrow selectors so the tree re-renders only for the slices it uses, not on
+  // every unrelated store update (e.g. live subscription values).
+  const namespaces = useExplorerStore(s => s.namespaces)
+  const objectTypes = useExplorerStore(s => s.objectTypes)
+  const objects = useExplorerStore(s => s.objects)
+  const allObjects = useExplorerStore(s => s.allObjects)
+  const hierarchicalRoots = useExplorerStore(s => s.hierarchicalRoots)
+  const childrenByParent = useExplorerStore(s => s.childrenByParent)
+  const searchQuery = useExplorerStore(s => s.searchQuery)
+  const setSearchQuery = useExplorerStore(s => s.setSearchQuery)
+  const pollIntervalMs = useExplorerStore(s => s.pollIntervalMs)
+  const manualRefreshTick = useExplorerStore(s => s.manualRefreshTick)
+  // Only the flat Objects folder needs to know its own expansion state here, so
+  // its (potentially huge) child list is filtered/built only while it is open.
+  const objectsExpanded = useExplorerStore(s => s.expandedNodes.has(OBJECTS_FOLDER_ID))
   const isConnected = useConnectionStore(state => state.isConnected)
+
+  // Shared scroll container + content wrapper, referenced by the virtualized
+  // Objects list to window its rows and track its offset within the scroll area.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
 
   const refreshTree = useCallback(async () => {
     const client = getClient()
     if (!client) return
 
-    const { expandedNodes, setNamespaces, setObjectTypes, setObjects, setAllObjects, setHierarchicalRoots, setChildObjects } = useExplorerStore.getState()
+    const { expandedNodes, setNamespaces, setObjectTypes, setObjects, setHierarchicalRoots, setChildObjects } = useExplorerStore.getState()
 
     try {
       const [namespaces, objectTypes] = await Promise.all([
@@ -457,9 +207,7 @@ export function TreeView() {
       if ((nodeId === OBJECTS_FOLDER_ID || nodeId === HIERARCHICAL_FOLDER_ID) && !allObjectsRefreshed) {
         allObjectsRefreshed = true
         try {
-          const objects = await client.getObjects()
-          await resolveCompositionFlags(client, objects)
-          setAllObjects(objects)
+          await refreshAllObjects(client, true)
         } catch (err) {
           console.error('Background refresh: all objects failed', err)
         }
@@ -584,8 +332,19 @@ export function TreeView() {
     }
   })
 
-  // Filter all objects for the Objects folder (flat list — only direct matches)
-  const filteredAllObjects = allObjects.filter(obj => !filterText || objMatches(obj))
+  // Filter all objects for the Objects folder (flat list — only direct matches).
+  // Materialized only while the Objects folder is open: with tens of thousands
+  // of objects, filtering and building this array on every render is a large
+  // cost that would otherwise be paid even while the folder is collapsed.
+  const filteredAllObjects = useMemo(() => {
+    if (!objectsExpanded) return [] as ObjectInstance[]
+    if (!filterText) return allObjects
+    return allObjects.filter(obj =>
+      obj.displayName.toLowerCase().includes(filterText) ||
+      obj.elementId.toLowerCase().includes(filterText) ||
+      obj.namespaceUri.toLowerCase().includes(filterText)
+    )
+  }, [objectsExpanded, filterText, allObjects])
 
   const filteredHierarchicalRoots = hierarchicalRoots.filter(
     obj => !filterText || hierarchyVisibleIds.has(obj.elementId)
@@ -621,8 +380,8 @@ export function TreeView() {
           widest row so long labels/deep nesting extend a horizontal scrollbar,
           while min-w-full keeps rows (highlights, count leader-lines) panel-wide
           when content fits. */}
-      <div className="flex-1 min-h-0 overflow-auto">
-       <div className="w-max min-w-full">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto">
+       <div ref={contentRef} className="w-max min-w-full">
       {/* Namespaces folder */}
       <TreeNode
         id={NAMESPACES_FOLDER_ID}
@@ -694,14 +453,12 @@ export function TreeView() {
          depth={0}
          hasChildren={true}
        >
-         {filteredAllObjects.map((obj) => (
-           <ObjectNode
-             key={`all-${obj.elementId}`}
-             obj={obj}
-             depth={1}
-             filterText={filterText}
-           />
-         ))}
+         <VirtualObjectRows
+           roots={filteredAllObjects}
+           scrollRef={scrollRef}
+           contentRef={contentRef}
+           filterText={filterText}
+         />
          {allObjects.length > 0 && filteredAllObjects.length === 0 && (
            <div className="text-i3x-text-muted text-sm py-2 pl-8">
              No matching objects
@@ -724,7 +481,7 @@ export function TreeView() {
             obj={obj}
             depth={1}
             filterText={filterText}
-            allObjects={allObjects}
+            childrenByParent={childrenByParent}
             visibleIds={hierarchyVisibleIds}
           />
         ))}
