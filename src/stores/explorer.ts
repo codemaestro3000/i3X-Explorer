@@ -39,6 +39,13 @@ interface ExplorerState {
   // The hierarchy view looks up children here in O(1) instead of scanning the
   // entire allObjects array (O(n)) on every node.
   childrenByParent: Map<string, ObjectInstance[]>
+  // parentId → on-demand HasChildren fetched via /objects/related that are NOT
+  // in the flat allObjects list (children a source serves on demand rather than
+  // in bulk browse). Merged with childrenByParent when rendering the hierarchy tree.
+  onDemandChildren: Map<string, ObjectInstance[]>
+  // Hierarchy nodes whose on-demand children have been resolved at least once,
+  // so an optimistic chevron on an isComposition leaf can settle.
+  onDemandResolved: Set<string>
   expandedNodes: Set<string>
   selectedItem: SelectedItem | null
   isLoading: boolean
@@ -53,6 +60,7 @@ interface ExplorerState {
   setAllObjects: (objects: ObjectInstance[]) => void
   setHierarchicalRoots: (roots: ObjectInstance[]) => void
   setChildObjects: (parentId: string, children: ObjectInstance[]) => void
+  setOnDemandChildren: (parentId: string, children: ObjectInstance[]) => void
   mergeCompositionFlags: (entries: Iterable<[string, number]>) => void
   toggleNode: (nodeId: string) => void
   expandNode: (nodeId: string) => void
@@ -76,6 +84,8 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   compositionCache: new Map(),
   typeIndex: new Map(),
   childrenByParent: new Map(),
+  onDemandChildren: new Map(),
+  onDemandResolved: new Set(),
   expandedNodes: new Set(),
   selectedItem: null,
   isLoading: false,
@@ -118,6 +128,15 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
     const updated = new Map(current)
     updated.set(parentId, children)
     set({ childObjects: updated })
+  },
+
+  setOnDemandChildren: (parentId, children) => {
+    const { onDemandChildren, onDemandResolved } = get()
+    const updatedChildren = new Map(onDemandChildren)
+    updatedChildren.set(parentId, children)
+    const updatedResolved = new Set(onDemandResolved)
+    updatedResolved.add(parentId)
+    set({ onDemandChildren: updatedChildren, onDemandResolved: updatedResolved })
   },
 
   mergeCompositionFlags: (entries) => {
@@ -169,6 +188,8 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
     compositionCache: new Map(),
     typeIndex: new Map(),
     childrenByParent: new Map(),
+    onDemandChildren: new Map(),
+    onDemandResolved: new Set(),
     expandedNodes: new Set(),
     selectedItem: null,
     isLoading: false,

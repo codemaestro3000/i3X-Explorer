@@ -4,6 +4,7 @@ import { getClient } from '../../api/client'
 import type { Namespace, ObjectType, ObjectInstance } from '../../api/types'
 import {
   resolveCompositionFlags,
+  resolveOnDemandChildren,
   refreshAllObjects,
   OBJECTS_FOLDER_ID,
   HIERARCHICAL_FOLDER_ID,
@@ -136,6 +137,10 @@ export function TreeNode({ id, label, type, data, depth, hasChildren, count, chi
           } catch (err) {
             console.error('Failed to refresh objects for hierarchy node:', err)
           }
+          // Surface children a source serves on demand via /objects/related that
+          // never appear in the flat /objects list, so they show up under the
+          // node like any other child.
+          await resolveOnDemandChildren(client, id.slice(5))
         }
       }
 

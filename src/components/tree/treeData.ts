@@ -43,6 +43,23 @@ export async function resolveCompositionFlags(client: I3XClient, loaded: ObjectI
   if (additions.size > 0) mergeCompositionFlags(additions)
 }
 
+// Fetch a hierarchy node's on-demand HasChildren — children a source serves via
+// /objects/related but deliberately absent from the flat /objects list — and
+// store the ones not already indexed under this parent. Mirrors
+// resolveCompositionFlags, but for HasChildren hierarchy edges rather than
+// HasComponent composition edges.
+export async function resolveOnDemandChildren(client: I3XClient, elementId: string): Promise<void> {
+  const { childrenByParent, setOnDemandChildren } = useExplorerStore.getState()
+  const existing = new Set((childrenByParent.get(elementId) ?? []).map(c => c.elementId))
+  try {
+    const related = await client.getRelatedObjects(elementId, 'HasChildren')
+    const onDemand = related.filter(c => c.parentId === elementId && !existing.has(c.elementId))
+    setOnDemandChildren(elementId, onDemand)
+  } catch (err) {
+    console.error('Failed to resolve on-demand children via /objects/related:', err)
+  }
+}
+
 // Coalesce + throttle full "all objects" refetches. Expanding a hierarchy node
 // refetches the entire object set to surface dynamically-discovered objects
 // (e.g. MQTT topics arriving over time). On large catalogs that full refetch is

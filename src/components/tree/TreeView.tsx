@@ -7,6 +7,7 @@ import { TreeNode } from './TreeNode'
 import { VirtualObjectRows } from './VirtualObjectRows'
 import {
   resolveCompositionFlags,
+  resolveOnDemandChildren,
   refreshAllObjects,
   hasCompositionChildren,
   getObjectLabel,
@@ -102,9 +103,22 @@ function HierarchicalObjectNode({
   visibleIds?: Set<string>
   ancestors?: Set<string>
 }) {
+  // On-demand HasChildren served via /objects/related but absent from the flat
+  // /objects list; fetched on expand and merged with the prebuilt parentId
+  // index below. onDemandResolved lets the optimistic hierarchy chevron settle
+  // once the server confirms whether this node has hidden children.
+  const onDemand = useExplorerStore(s => s.onDemandChildren.get(obj.elementId))
+  const onDemandResolved = useExplorerStore(s => s.onDemandResolved.has(obj.elementId))
+
   // Direct children via the prebuilt parentId index (O(1) lookup instead of
-  // scanning the entire allObjects array on every node).
-  const children = childrenByParent.get(obj.elementId) ?? []
+  // scanning the entire allObjects array on every node), with any on-demand
+  // children merged in after them.
+  const parentIdChildren = childrenByParent.get(obj.elementId) ?? []
+  const parentIdChildIds = new Set(parentIdChildren.map(child => child.elementId))
+  const onDemandOnly = onDemand?.filter(child => !parentIdChildIds.has(child.elementId)) ?? []
+  const children = onDemandOnly.length > 0
+    ? [...parentIdChildren, ...onDemandOnly]
+    : parentIdChildren
   const filteredChildren = filterText
     ? children.filter(child => visibleIds?.has(child.elementId))
     : children
@@ -122,7 +136,9 @@ function HierarchicalObjectNode({
   const childAncestors = new Set(ancestors)
   childAncestors.add(obj.elementId)
 
-  const hasChildren = children.length > 0
+  // Chevron: real children, or an unresolved hierarchy node that may have
+  // on-demand HasChildren fetched only when expanded.
+  const hasChildren = children.length > 0 || !onDemandResolved
 
   return (
     <TreeNode
@@ -158,6 +174,7 @@ export function TreeView() {
   const allObjects = useExplorerStore(s => s.allObjects)
   const hierarchicalRoots = useExplorerStore(s => s.hierarchicalRoots)
   const childrenByParent = useExplorerStore(s => s.childrenByParent)
+  const onDemandChildren = useExplorerStore(s => s.onDemandChildren)
   const searchQuery = useExplorerStore(s => s.searchQuery)
   const setSearchQuery = useExplorerStore(s => s.setSearchQuery)
   const pollIntervalMs = useExplorerStore(s => s.pollIntervalMs)
@@ -241,6 +258,12 @@ export function TreeView() {
           }
         }
       }
+
+      // Keep on-demand children fresh for expanded hierarchy branches, mirroring
+      // the compositional refresh above.
+      if (nodeId.startsWith('hier:')) {
+        await resolveOnDemandChildren(client, nodeId.slice(5))
+      }
     }
   }, [])
 
@@ -287,7 +310,11 @@ export function TreeView() {
   const matchedNamespaceUris = new Set<string>()
   if (filterText) {
     const objById = new Map(allObjects.map(o => [o.elementId, o]))
-    for (const obj of allObjects) {
+    for (const root of hierarchicalRoots) objById.set(root.elementId, root)
+    for (const children of onDemandChildren.values()) {
+      for (const child of children) objById.set(child.elementId, child)
+    }
+    for (const obj of objById.values()) {
       if (!objMatches(obj)) continue
       matchingTypeIds.add(obj.typeId)
       // Walk parents up to the root, marking every ancestor visible
